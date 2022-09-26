@@ -8,7 +8,7 @@ if [ -z "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
 fi
 
 echo "Getting token from Github"
-BODY=$(curl -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL" --silent --fail-with-body)
+BODY=$(curl -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL" --silent --fail)
 if [ $? -ne 0 ]; then
   echo "Failed to get token from Github"
   echo "$BODY"
@@ -24,7 +24,7 @@ fi
 
 echo "Deploying new version"
 
-FASIT_BODY=$(curl -H "Authorization:Bearer $TOKEN" "$ENDPOINT/github/deploy/$FEATURE_NAME" -X POST -d "$JSON" --fail-with-body --silent)
+FASIT_BODY=$(curl -H "Authorization:Bearer $TOKEN" "$ENDPOINT/github/deploy/$FEATURE_NAME" -X POST -d "$JSON" --fail --silent)
 if [ $? -ne 0 ]; then
   echo "Failed to deploy new version"
   echo "$FASIT_BODY"
