@@ -15,7 +15,7 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - run: deploy.sh
+    - run: ./deploy.sh
       shell: bash
       env:
         ENDPOINT: ${{ inputs.endpoint }}
