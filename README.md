@@ -16,6 +16,8 @@ jobs:
   rollout:
     needs: ["build_and_push"]
     runs-on: fasit-deploy
+    permissions:
+      id-token: write
     steps:
       - name: read sha
         id: sha
