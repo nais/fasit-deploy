@@ -42,6 +42,10 @@ echo "[Rollout progress](https://fasit.nais.io/rollout/$ROLLOUT_ID)" >> "$GITHUB
 
 echo "Rollout progress: https://fasit.nais.io/rollout/$ROLLOUT_ID"
 
-if ! error=$(echo "$FASIT_BODY" | jq -r -e '.error?'); then
-  echo "Got a warning while deploying: $error" | tee -a "$GITHUB_STEP_SUMMARY"
+if error=$(echo "$FASIT_BODY" | jq -r -e '.error?'); then
+  echo "Got an error while deploying: $error" | tee -a "$GITHUB_STEP_SUMMARY"
+fi
+
+if envNotAvailable=$(echo "$FASIT_BODY" | jq -r -e 'try (.envNotAvailable? | select(length > 0) | "Not enabled in: "+ (. | join(", ")))'); then
+  echo "**WARNING**: $envNotAvailable" | tee -a "$GITHUB_STEP_SUMMARY"
 fi
