@@ -23,11 +23,13 @@ fi
 
 echo "Deploying new version"
 
-if ! FASIT_BODY=$(curl -H "Authorization:Bearer $TOKEN" "$ENDPOINT/github/deploy/$FEATURE_NAME" -X POST -d "$JSON" --fail-with-body --silent); then
+
+if ! FASIT_BODY=$(curl -H "Authorization:Bearer $TOKEN" "$ENDPOINT/github/deploy/$FEATURE_NAME" -X POST -d "$JSON" --fail --silent); then
   echo "Failed to deploy new version"
   echo "$FASIT_BODY"
   exit 1
 fi
+
 
 if ! ROLLOUT_ID=$(echo "$FASIT_BODY" | jq -r -e '.rollout?'); then
   echo "Failed get rollout id"
