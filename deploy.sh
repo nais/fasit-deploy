@@ -1,4 +1,10 @@
 #!/bin/bash
+
+# https://stackoverflow.com/a/67216965
+curl_fail_with_body() {
+  curl -o - -w "\n%{http_code}\n" "$@" | awk '{l[NR] = $0} END {for (i=1; i<=NR-1; i++) print l[i]}; END{ if ($0<200||$0>299) exit 1 }'
+}
+
 if [ -z "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
   echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN is not available."
   echo "Have you added the following?"
@@ -8,7 +14,7 @@ if [ -z "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
 fi
 
 echo "Getting token from Github"
-if ! BODY=$(curl -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL" --silent --fail); then
+if ! BODY=$(curl_fail_with_body -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL" --silent); then
   echo "Failed to get token from Github"
   echo "$BODY"
   exit 1
@@ -23,13 +29,11 @@ fi
 
 echo "Deploying new version"
 
-
-if ! FASIT_BODY=$(curl -H "Authorization:Bearer $TOKEN" "$ENDPOINT/github/deploy/$FEATURE_NAME" -X POST -d "$JSON" --fail --silent); then
+if ! FASIT_BODY=$(curl_fail_with_body -H "Authorization:Bearer $TOKEN" "$ENDPOINT/github/deploy/$FEATURE_NAME" -X POST -d "$JSON" --silent); then
   echo "Failed to deploy new version"
   echo "$FASIT_BODY"
   exit 1
 fi
-
 
 if ! ROLLOUT_ID=$(echo "$FASIT_BODY" | jq -r -e '.rollout?'); then
   echo "Failed get rollout id"
