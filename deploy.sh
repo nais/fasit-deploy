@@ -13,6 +13,21 @@ if [ -z "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
   exit 1
 fi
 
+if [ -z "$FEATURE_NAME" ]; then
+  echo "feature_name is not set"
+  exit 1
+fi
+
+if [ -z "$CHART" ]; then
+  echo "chart is not set"
+  exit 1
+fi
+
+if [ -z "$VERSION" ]; then
+  echo "version is not set"
+  exit 1
+fi
+
 echo "Getting token from Github"
 if ! BODY=$(curl_fail_with_body -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL" --silent); then
   echo "Failed to get token from Github"
@@ -29,22 +44,18 @@ fi
 
 echo "Deploying new version"
 
-if ! FASIT_BODY=$(curl_fail_with_body -H "Authorization:Bearer $TOKEN" "$ENDPOINT/github/deploy/$FEATURE_NAME" -X POST -d "$JSON" --silent); then
+JSON='{"feature_name":"'$FEATURE_NAME'", "chart": "'$CHART'", "version": "'$VERSION'"}'
+
+if ! FASIT_BODY=$(curl_fail_with_body -H "Authorization:Bearer $TOKEN" "$ENDPOINT/github/rollout" -X POST -d "$JSON" --silent); then
   echo "Failed to deploy new version"
   echo "$FASIT_BODY"
   exit 1
 fi
 
-if ! ROLLOUT_ID=$(echo "$FASIT_BODY" | jq -r -e '.rollout?'); then
-  echo "Failed get rollout id"
-  echo "$FASIT_BODY"
-  exit 1
-fi
-
 echo '### Rollout created! :rocket:' >> "$GITHUB_STEP_SUMMARY"
-echo "[Rollout progress](https://fasit.nais.io/rollout/$ROLLOUT_ID)" >> "$GITHUB_STEP_SUMMARY"
+echo "[Rollout progress](https://fasit.nais.io/features/$FEATURE_NAME/rollouts)" >> "$GITHUB_STEP_SUMMARY"
 
-echo "Rollout progress: https://fasit.nais.io/rollout/$ROLLOUT_ID"
+echo "Rollout progress: https://fasit.nais.io/features/$FEATURE_NAME/rollouts"
 
 if error=$(echo "$FASIT_BODY" | jq -r -e '.error?'); then
   echo "Got an error while deploying: $error" | tee -a "$GITHUB_STEP_SUMMARY"

@@ -1,16 +1,19 @@
-name: 'Feature deploy'
-description: 'Deploy a new version of a fasit feature'
+name: "Feature deploy"
+description: "Deploy a new version of a fasit feature"
 inputs:
   endpoint:
-    description: 'The fasit endpoint to deploy to'
+    description: "The fasit endpoint to deploy to"
     required: true
     default: http://10.0.0.42
 
-  feature_name:  # id of input
-    description: 'feature name'
+  feature_name:
+    description: "feature name"
     required: true
-  json:  # id of input
-    description: 'json containing body for rollout request - ex {"imageTag": "2"}'
+  chart:
+    description: "chart name"
+    required: true
+  version:
+    description: "version"
     required: true
 runs:
   using: "composite"
@@ -20,4 +23,5 @@ runs:
       env:
         ENDPOINT: ${{ inputs.endpoint }}
         FEATURE_NAME: ${{ inputs.feature_name }}
-        JSON: ${{ inputs.json }}
+        CHART: ${{ inputs.chart }}
+        VERSION: ${{ inputs.version }}
