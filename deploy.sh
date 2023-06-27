@@ -13,10 +13,7 @@ if [ -z "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
   exit 1
 fi
 
-if [ -z "$FEATURE_NAME" ]; then
-  echo "feature_name is not set"
-  exit 1
-fi
+FEATURE_NAME=$(echo -n "$(echo oci://europe-north1-docker.pkg.dev/nais-io/nais/feature/reloader | grep -o  '[^/]*$')")
 
 if [ -z "$CHART" ]; then
   echo "chart is not set"
@@ -44,7 +41,7 @@ fi
 
 echo "Deploying new version"
 
-JSON='{"feature_name":"'$FEATURE_NAME'", "chart": "'$CHART'", "version": "'$VERSION'"}'
+JSON='{"chart": "'$CHART'", "version": "'$VERSION'"}'
 
 if ! FASIT_BODY=$(curl_fail_with_body -H "Authorization:Bearer $TOKEN" "$ENDPOINT/github/rollout" -X POST -d "$JSON" --silent); then
   echo "Failed to deploy new version"
@@ -53,9 +50,9 @@ if ! FASIT_BODY=$(curl_fail_with_body -H "Authorization:Bearer $TOKEN" "$ENDPOIN
 fi
 
 echo '### Rollout created! :rocket:' >> "$GITHUB_STEP_SUMMARY"
-echo "[Rollout progress](https://fasit.nais.io/features/$FEATURE_NAME/rollouts)" >> "$GITHUB_STEP_SUMMARY"
+echo "[Rollout progress](https://fasit.nais.io/features/$FEATURE_NAME/rollouts/$VERSION)" >> "$GITHUB_STEP_SUMMARY"
 
-echo "Rollout progress: https://fasit.nais.io/features/$FEATURE_NAME/rollouts"
+echo "Rollout progress: https://fasit.nais.io/features/$FEATURE_NAME/rollouts/$VERSION"
 
 if error=$(echo "$FASIT_BODY" | jq -r -e '.error?'); then
   echo "Got an error while deploying: $error" | tee -a "$GITHUB_STEP_SUMMARY"

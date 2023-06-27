@@ -5,10 +5,6 @@ inputs:
     description: "The fasit endpoint to deploy to"
     required: true
     default: http://10.0.0.42
-
-  feature_name:
-    description: "feature name"
-    required: true
   chart:
     description: "chart name"
     required: true
