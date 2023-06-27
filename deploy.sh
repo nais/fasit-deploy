@@ -13,7 +13,7 @@ if [ -z "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
   exit 1
 fi
 
-FEATURE_NAME=$(echo -n "$(echo oci://europe-north1-docker.pkg.dev/nais-io/nais/feature/reloader | grep -o  '[^/]*$')")
+FEATURE_NAME=$(echo -n "$(echo "$CHART" | grep -o  '[^/]*$')")
 
 if [ -z "$CHART" ]; then
   echo "chart is not set"
