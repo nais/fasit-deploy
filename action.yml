@@ -2,14 +2,17 @@ name: "Feature deploy"
 description: "Deploy a new version of a fasit feature"
 inputs:
   endpoint:
-    description: "The fasit endpoint to deploy to"
+    description: "fasit endpoint to deploy to"
     required: true
     default: http://10.0.0.42
+  feature_name:
+    description: "fasit feature name"
+    required: true
   chart:
-    description: "chart name"
+    description: "chart oci uri"
     required: true
   version:
-    description: "version"
+    description: "chart version"
     required: true
 runs:
   using: "composite"
