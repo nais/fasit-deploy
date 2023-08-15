@@ -5,9 +5,6 @@ inputs:
     description: "fasit endpoint to deploy to"
     required: true
     default: http://10.0.0.42
-  feature_name:
-    description: "fasit feature name"
-    required: true
   chart:
     description: "chart oci uri"
     required: true
