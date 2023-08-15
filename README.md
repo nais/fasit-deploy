@@ -2,34 +2,21 @@
 
 An action that rolls out a new version of a fasit-feature to all environments.
 
-## Preparing the feature in Fasit
-
-In the feature.yaml file in fasit, you have to explicitly set which github organization and repository who's allowed to upgrade the feature.
-
-```yaml
-rolloutSource:
-  - org: nais
-    repo: up
-```
-
 ## Usage
 
 ```yaml
 name: Build and deploy image
 jobs:
   rollout:
-    needs: ["build_and_push"]
+    needs: [build_push]
     runs-on: fasit-deploy
     permissions:
       id-token: write
     steps:
-      - name: read sha
-        id: sha
-        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-      - uses: nais/fasit-deploy@main
+      - uses: nais/fasit-deploy@v2
         with:
-          json: '{"image": {"tag": "sha-${{ steps.vars.outputs.sha_short }}"}}'
-          feature_name: <feature_name>
+          chart: # OCI Chart URL
+          version: # Chart version
 ```
 
 ## How it works
