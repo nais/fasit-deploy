@@ -41,7 +41,8 @@ fi
 
 echo "Deploying new version"
 
-JSON='{"chart": "'$CHART'", "version": "'$VERSION'"}'
+REPO_NAME=$(echo "$GITHUB_REPOSITORY" | cut -d'/' -f2)
+JSON='{"chart": "'$CHART'", "version": "'$VERSION'", "ref": {"owner": "'$GITHUB_REPOSITORY_OWNER'", "repo": "'$REPO_NAME'", "ref": "'$GITHUB_SHA'"}}'
 
 if ! FASIT_BODY=$(curl_fail_with_body -H "Authorization:Bearer $TOKEN" "$ENDPOINT/github/rollout" -X POST -d "$JSON" --silent); then
   echo "Failed to deploy new version"
