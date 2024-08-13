@@ -18,6 +18,5 @@ runs:
       shell: bash
       env:
         ENDPOINT: ${{ inputs.endpoint }}
-        FEATURE_NAME: ${{ inputs.feature_name }}
         CHART: ${{ inputs.chart }}
         VERSION: ${{ inputs.version }}
