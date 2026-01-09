@@ -41,24 +41,21 @@ fi
 
 echo "Deploying new version"
 
+TARGET=${TARGET:-"{}"}
+GLOBAL=${GLOBAL:-"true"}
 REPO_NAME=$(echo "$GITHUB_REPOSITORY" | cut -d'/' -f2)
-JSON='{"chart": "'$CHART'", "version": "'$VERSION'", "ref": {"owner": "'$GITHUB_REPOSITORY_OWNER'", "repo": "'$REPO_NAME'", "ref": "'$GITHUB_SHA'"}}'
+JSON='{"global": '$GLOBAL',"target": '$TARGET', "chart": "'$CHART'", "version": "'$VERSION'", "ref": {"owner": "'$GITHUB_REPOSITORY_OWNER'", "repo": "'$REPO_NAME'", "ref": "'$GITHUB_SHA'"}}'
 
-if ! FASIT_BODY=$(curl_fail_with_body -H "Authorization:Bearer $TOKEN" "$ENDPOINT/github/rollout" -X POST -d "$JSON" --silent); then
+if ! FASIT_BODY=$(curl_fail_with_body -H "Authorization:Bearer $TOKEN" "$ENDPOINT/github/deployment" -X POST -d "$JSON" --silent); then
   echo "Failed to deploy new version"
   echo "$FASIT_BODY"
   exit 1
 fi
 
-echo '### Rollout created! :rocket:' >> "$GITHUB_STEP_SUMMARY"
-echo "[Rollout progress](https://fasit.nais.io/features/$FEATURE_NAME/rollouts/$VERSION)" >> "$GITHUB_STEP_SUMMARY"
+deployment_id=$(echo "$FASIT_BODY" | jq -r '.id')
 
-echo "Rollout progress: https://fasit.nais.io/features/$FEATURE_NAME/rollouts/$VERSION"
+echo '### Deployment created! :rocket:' >> "$GITHUB_STEP_SUMMARY"
+echo "[Deployment progress](https://fasit.nais.io/features/$FEATURE_NAME/deployments/$deployment_id)" >> "$GITHUB_STEP_SUMMARY"
 
-if error=$(echo "$FASIT_BODY" | jq -r -e '.error?'); then
-  echo "Got an error while deploying: $error" | tee -a "$GITHUB_STEP_SUMMARY"
-fi
+echo "Deployment progress: https://fasit.nais.io/features/$FEATURE_NAME/deployments/$deployment_id"
 
-if envNotAvailable=$(echo "$FASIT_BODY" | jq -r -e 'try (.envNotAvailable? | select(length > 0) | "Not enabled in: "+ (. | join(", ")))'); then
-  echo "**WARNING**: $envNotAvailable" | tee -a "$GITHUB_STEP_SUMMARY"
-fi

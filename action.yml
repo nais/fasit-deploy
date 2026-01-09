@@ -11,6 +11,14 @@ inputs:
   version:
     description: "chart version"
     required: true
+  target:
+    description: "environment target"
+    required: true
+    default: "{}"
+  global:
+    description: "mark feature in deployment request as global"
+    required: true
+    default: "true"
 runs:
   using: "composite"
   steps:
@@ -20,3 +28,5 @@ runs:
         ENDPOINT: ${{ inputs.endpoint }}
         CHART: ${{ inputs.chart }}
         VERSION: ${{ inputs.version }}
+        TARGET: ${{ inputs.target }}
+        GLOBAL: ${{ inputs.global }}
