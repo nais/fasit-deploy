@@ -43,8 +43,9 @@ echo "Deploying new version"
 
 TARGET=${TARGET:-"{}"}
 GLOBAL=${GLOBAL:-"true"}
+SKIP_CI=${SKIP_CI:-"false"}
 REPO_NAME=$(echo "$GITHUB_REPOSITORY" | cut -d'/' -f2)
-JSON='{"global": '$GLOBAL',"target": '$TARGET', "chart": "'$CHART'", "version": "'$VERSION'", "ref": {"owner": "'$GITHUB_REPOSITORY_OWNER'", "repo": "'$REPO_NAME'", "ref": "'$GITHUB_SHA'"}}'
+JSON='{"skipCI": '$SKIP_CI', "global": '$GLOBAL',"target": '$TARGET', "chart": "'$CHART'", "version": "'$VERSION'", "ref": {"owner": "'$GITHUB_REPOSITORY_OWNER'", "repo": "'$REPO_NAME'", "ref": "'$GITHUB_SHA'"}}'
 
 if ! FASIT_BODY=$(curl_fail_with_body -H "Authorization:Bearer $TOKEN" "$ENDPOINT/github/deployment" -X POST -d "$JSON" --silent); then
   echo "Failed to deploy new version"

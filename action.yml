@@ -18,6 +18,10 @@ inputs:
     description: "mark feature in deployment request as global"
     required: true
     default: "true"
+  skip-ci:
+    description: "skip ci for the deployment"
+    required: true
+    default: "false"
 runs:
   using: "composite"
   steps:
