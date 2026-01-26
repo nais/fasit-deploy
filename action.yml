@@ -33,3 +33,4 @@ runs:
         VERSION: ${{ inputs.version }}
         TARGET: ${{ inputs.target }}
         GLOBAL: ${{ inputs.global }}
+        SKIP_CI: ${{ inputs.skip-ci }}
