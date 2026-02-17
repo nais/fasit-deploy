@@ -44,8 +44,9 @@ echo "Deploying new version"
 TARGET=${TARGET:-"{}"}
 GLOBAL=${GLOBAL:-"true"}
 SKIP_CI=${SKIP_CI:-"false"}
+WAIT=${WAIT:-"true"}
 REPO_NAME=$(echo "$GITHUB_REPOSITORY" | cut -d'/' -f2)
-JSON='{"skipCI": '$SKIP_CI', "global": '$GLOBAL',"target": '$TARGET', "chart": "'$CHART'", "version": "'$VERSION'", "ref": {"owner": "'$GITHUB_REPOSITORY_OWNER'", "repo": "'$REPO_NAME'", "ref": "'$GITHUB_SHA'"}}'
+JSON='{"ci": {"skip": '$SKIP_CI', "wait": '$WAIT'}, "global": '$GLOBAL',"target": '$TARGET', "chart": "'$CHART'", "version": "'$VERSION'", "ref": {"owner": "'$GITHUB_REPOSITORY_OWNER'", "repo": "'$REPO_NAME'", "ref": "'$GITHUB_SHA'"}}'
 
 if ! FASIT_BODY=$(curl_fail_with_body -H "Authorization:Bearer $TOKEN" "$ENDPOINT/github/deployment" -X POST -d "$JSON" --silent); then
   echo "Failed to deploy new version"
@@ -53,10 +54,8 @@ if ! FASIT_BODY=$(curl_fail_with_body -H "Authorization:Bearer $TOKEN" "$ENDPOIN
   exit 1
 fi
 
-deployment_id=$(echo "$FASIT_BODY" | jq -r '.id')
-
 echo '### Deployment created! :rocket:' >> "$GITHUB_STEP_SUMMARY"
-echo "[Deployment progress](https://fasit.nais.io/features/$FEATURE_NAME/deployments/$deployment_id)" >> "$GITHUB_STEP_SUMMARY"
+echo "[Deployment progress](https://fasit.nais.io/deployments)" >> "$GITHUB_STEP_SUMMARY"
 
-echo "Deployment progress: https://fasit.nais.io/features/$FEATURE_NAME/deployments/$deployment_id"
+echo "Deployment progress: https://fasit.nais.io/deployments"
 

@@ -22,6 +22,10 @@ inputs:
     description: "skip ci for the deployment"
     required: true
     default: "false"
+  wait:
+    description: "wait until the deployment finishes before returning"
+    required: true
+    default: "true"
 runs:
   using: "composite"
   steps:
@@ -34,3 +38,4 @@ runs:
         TARGET: ${{ inputs.target }}
         GLOBAL: ${{ inputs.global }}
         SKIP_CI: ${{ inputs.skip-ci }}
+        WAIT: ${{ inputs.wait }}
