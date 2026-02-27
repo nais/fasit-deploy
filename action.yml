@@ -5,6 +5,12 @@ inputs:
     description: "fasit endpoint to deploy to"
     required: true
     default: http://10.0.0.42
+  google_service_account:
+    description: "Name of google service account to impersonate"
+    required: false
+  workload_identity_provider:
+    description: "The workload identity provider for google service account impersonation"
+    required: false
   chart:
     description: "chart oci uri"
     required: true
@@ -14,6 +20,10 @@ inputs:
   target:
     description: "environment target"
     required: true
+  all-environments:
+    description: "deploy to all environments"
+    required: true
+    default: "false"
   global:
     description: "mark feature in deployment request as global"
     required: true
@@ -29,6 +39,25 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - if: ${{ inputs.target == '' && (inputs.google_service_account == '' || inputs.workload_identity_provider) }}
+      run: |
+        echo "When no target specified you must provide google_service_account and workload_identity_provider in order to resolve the target from the helm chart"
+        exit 1
+      shell: bash
+
+    - id: "auth"
+      name: "Authenticate to Google Cloud"
+      if: ${{ inputs.target == '' }}
+      uses: "google-github-actions/auth@ba79af03959ebeac9769e648f473a284504d9193" # ratchet:google-github-actions/auth@v2
+      with:
+        workload_identity_provider: "${{ inputs.workload_identity_provider }}"
+        service_account: "${{ inputs.google_service_account }}@nais-io.iam.gserviceaccount.com"
+        token_format: "access_token"
+
+    - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # ratchet:azure/setup-helm@v4
+      if: ${{ inputs.target == '' }}
+      name: "Setup Helm"
+
     - run: ${{ github.action_path }}/deploy.sh
       shell: bash
       env:
@@ -36,6 +65,7 @@ runs:
         CHART: ${{ inputs.chart }}
         VERSION: ${{ inputs.version }}
         TARGET: ${{ inputs.target }}
+        ALL_ENVS: ${{ inputs.all-environments }}
         GLOBAL: ${{ inputs.global }}
         SKIP_CI: ${{ inputs.skip-ci }}
         WAIT: ${{ inputs.wait }}
