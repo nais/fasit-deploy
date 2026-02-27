@@ -38,7 +38,7 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - if: ${{ inputs.target == '' && (inputs.google_service_account == '' || inputs.workload_identity_provider) }}
+    - if: ${{ inputs.target == '' && (inputs.google_service_account == '' || inputs.workload_identity_provider == '') }}
       run: |
         echo "When no target specified you must provide google_service_account and workload_identity_provider in order to resolve the target from the helm chart"
         exit 1
