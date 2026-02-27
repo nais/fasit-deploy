@@ -18,12 +18,11 @@ inputs:
     description: "chart version"
     required: true
   target:
-    description: "environment target"
-    required: true
+    description: "environment target json string"
+    required: false
   all-environments:
-    description: "deploy to all environments"
-    required: true
-    default: "false"
+    description: "deploy to all environments: true or false"
+    required: false
   global:
     description: "mark feature in deployment request as global"
     required: true

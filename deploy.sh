@@ -67,7 +67,7 @@ if [ -z "$TARGET" ] && [ -z "$ALL_ENVS" ]; then
   fi
   rm -rf "$CHART_DIR"
   echo "Resolved target from chart: $TARGET"
-elif [ -n "$ALL_ENVS" ] && [ -z "$TARGET" ]; then
+elif [ "$ALL_ENVS" == "true" ] && [ -z "$TARGET" ]; then
   TARGET='{}'
 fi
 
