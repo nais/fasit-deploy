@@ -18,11 +18,27 @@ jobs:
           chart: # OCI Chart URL
           version: # Chart version
           target: '{"kind":"management","tenant":"nav"}' # optional
+          google_service_account: gh-${{ env.NAME }} # required if target is set in Feature.yaml
+          workload_identity_provider: ${{ secrets.NAIS_IO_WORKLOAD_IDENTITY_PROVIDER }} # required if target is set in Feature.yaml
 ```
 
 ## Target environments
 
-The `target` input is used to specify which environments the feature should be deployed to, by specifying a set of labels as a JSON object. The labels must match the target environment labels. Environment labels can be found in Fasit. `target` can be omitted, or be set to an empty object, in which case the feature will be deployed to all environments.
+The `target` input is used to specify which environments the feature should be deployed to, by specifying a set of labels as a JSON object.
+The labels must match the target environment labels.
+Environment labels can be found in [Fasit](https://fasit.nais.io/labels).
+
+You can also set `target` in the `chart/Feature.yaml`.
+This require `google_service_account` and `workload_identity_provider` to be set in the action.
+
+Example:
+```yaml
+target:
+  kind: management
+  tenant: nav
+```
+
+`target` can be omitted, or be set to an empty object, in which case the feature will be deployed to all environments.
 
 ## How it works
 
