@@ -1,0 +1,13 @@
+steps:
+  - uses: nais/fasit-deploy@v4
+    with:
+      version: 1.0.0
+      chart: some-chart
+      # EITHER:
+      targets-file: ./targets.json
+      # OR:
+      targets: |
+        [
+          { "target": { "kind": "management", "tenant": "ci" }, "wait": true },
+          { "target": { "kind": "management", "tenant": "nav" }, "wait": false }
+        ]

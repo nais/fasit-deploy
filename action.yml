@@ -11,13 +11,14 @@ inputs:
   version:
     description: "Chart version"
     required: true
-  target:
-    description: "Environment target as JSON object (e.g. {\"kind\":\"management\",\"tenant\":\"nav\"})"
-    required: true
-  wait:
-    description: "Wait until the deployment finishes before returning"
-    required: true
-    default: "true"
+  targets:
+    description: "Inline JSON array of {target, wait} entries. Mutually exclusive with targets-file."
+    required: false
+    default: ""
+  targets-file:
+    description: "Path to a JSON file containing an array of {target, wait} entries. Mutually exclusive with targets."
+    required: false
+    default: ""
 runs:
   using: "node24"
   main: "src/index.js"

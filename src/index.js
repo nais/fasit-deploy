@@ -4,47 +4,12 @@ const fs = require('node:fs');
 
 /**
  * Reads a GitHub Actions input by name from the INPUT_* environment variable.
- * Hyphens in the name are preserved (e.g. 'skip-ci' → INPUT_SKIP-CI).
+ * Hyphens in the name are preserved (e.g. 'targets-file' → INPUT_TARGETS-FILE).
  * @param {string} name - The input name as declared in action.yml
  * @returns {string} The input value, or empty string if unset
  */
 function readInput(name) {
   return process.env['INPUT_' + name.toUpperCase()] || '';
-}
-
-/**
- * Parses a string boolean value (case-insensitive "true"/"false") to a boolean.
- * @param {string} value - The string to parse
- * @param {string} fieldName - The field name to include in error messages
- * @returns {boolean}
- */
-function parseBoolean(value, fieldName) {
-  const lower = value.toLowerCase();
-  if (lower === 'true') return true;
-  if (lower === 'false') return false;
-  throw new Error(`Invalid boolean value for ${fieldName}: "${value}". Expected "true" or "false".`);
-}
-
-/**
- * Parses and validates a JSON string as a plain object target.
- * Rejects empty strings, non-JSON, arrays, null, and scalar values.
- * @param {string} raw - The raw JSON string
- * @returns {Object} The parsed target object
- */
-function parseTarget(raw) {
-  if (!raw || !raw.trim()) {
-    throw new Error('target is required and must be a JSON object (e.g. {"kind":"management","tenant":"nav"})');
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(raw.trim());
-  } catch (e) {
-    throw new Error(`target is not valid JSON: ${e.message}`);
-  }
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('target must be a JSON object, not an array, null, or scalar value');
-  }
-  return parsed;
 }
 
 /**
@@ -58,6 +23,78 @@ function requireEnv(name) {
     throw new Error(`Required environment variable ${name} is not set`);
   }
   return value;
+}
+
+/**
+ * @typedef {Object} TargetEntry
+ * @property {Object} target - Map of label keys to label values
+ * @property {boolean} wait - Whether to wait for this deployment to finish
+ */
+
+/**
+ * Resolves the targets list from inline JSON or a file path; exactly one must be set.
+ * @param {string} inline - Raw JSON string from the `targets` input
+ * @param {string} filePath - Path from the `targets-file` input
+ * @returns {TargetEntry[]} The validated, non-empty list of entries
+ */
+function resolveTargets(inline, filePath) {
+  const hasInline = inline.trim().length > 0;
+  const hasFile = filePath.trim().length > 0;
+  if (hasInline && hasFile) {
+    throw new Error('Inputs "targets" and "targets-file" are mutually exclusive; set exactly one');
+  }
+  if (!hasInline && !hasFile) {
+    throw new Error('One of "targets" or "targets-file" is required');
+  }
+  let raw;
+  let source;
+  if (hasFile) {
+    const resolvedPath = filePath.trim();
+    try {
+      raw = fs.readFileSync(resolvedPath, 'utf8');
+    } catch (e) {
+      throw new Error(`Failed to read targets-file "${resolvedPath}": ${e.message}`);
+    }
+    source = `targets-file (${resolvedPath})`;
+  } else {
+    raw = inline;
+    source = 'targets';
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    throw new Error(`${source} is not valid JSON: ${e.message}`);
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error(`${source} must be a JSON array of {target, wait} entries`);
+  }
+  if (parsed.length === 0) {
+    throw new Error(`${source} must contain at least one entry`);
+  }
+  parsed.forEach((entry, i) => validateEntry(entry, i, source));
+  return parsed;
+}
+
+/**
+ * Validates a single targets entry has the shape {target: object, wait: boolean}.
+ * @param {unknown} entry - The candidate entry
+ * @param {number} index - Position in the list, for error messages
+ * @param {string} source - Origin label, for error messages
+ * @returns {void}
+ */
+function validateEntry(entry, index, source) {
+  const at = `${source}[${index}]`;
+  if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+    throw new Error(`${at} must be an object with "target" and "wait" keys`);
+  }
+  const { target, wait } = entry;
+  if (target === null || typeof target !== 'object' || Array.isArray(target)) {
+    throw new Error(`${at}.target must be a JSON object`);
+  }
+  if (typeof wait !== 'boolean') {
+    throw new Error(`${at}.wait must be a boolean`);
+  }
 }
 
 /**
@@ -96,7 +133,7 @@ async function fetchOidcToken(requestUrl, requestToken) {
  */
 
 /**
- * Builds the deployment request payload matching the Fasit API contract.
+ * Builds a single deployment request payload.
  * @param {{ chart: string, version: string, target: Object, wait: boolean, owner: string, repo: string, sha: string }} params
  * @returns {DeployPayload}
  */
@@ -135,7 +172,6 @@ async function postDeployment(endpoint, token, payload) {
 
 /**
  * Appends a message to the GitHub step summary file, if configured.
- * No-op when GITHUB_STEP_SUMMARY is not set.
  * @param {string} message - The markdown content to append
  * @returns {void}
  */
@@ -146,7 +182,19 @@ function writeStepSummary(message) {
 }
 
 /**
- * Main entry point: reads inputs, fetches OIDC token, and posts a deployment to Fasit.
+ * Formats a target object as a stable, human-readable label string.
+ * Used in step summaries; not sent to Fasit.
+ * @param {Object} target - The target labels
+ * @returns {string}
+ */
+function formatTarget(target) {
+  const keys = Object.keys(target).sort();
+  if (keys.length === 0) return '{}';
+  return '{' + keys.map((k) => `${k}: ${target[k]}`).join(', ') + '}';
+}
+
+/**
+ * Main entry point: reads inputs, fetches OIDC token, and posts one deployment per target.
  * @returns {Promise<void>}
  */
 async function main() {
@@ -160,8 +208,7 @@ async function main() {
     const version = readInput('version').trim();
     if (!version) throw new Error('Input "version" is required and must not be empty');
 
-    const target = parseTarget(readInput('target'));
-    const wait = parseBoolean(readInput('wait'), 'wait');
+    const targets = resolveTargets(readInput('targets'), readInput('targets-file'));
 
     const repository = requireEnv('GITHUB_REPOSITORY');
     const owner = requireEnv('GITHUB_REPOSITORY_OWNER');
@@ -174,13 +221,18 @@ async function main() {
     console.log('Getting token from Github');
     const token = await fetchOidcToken(oidcUrl, oidcToken);
 
-    console.log('Deploying new version');
-    const payload = buildPayload({ chart, version, target, wait, owner, repo, sha });
-    console.log('JSON:', JSON.stringify(payload));
-
-    await postDeployment(endpoint, token, payload);
-
-    writeStepSummary('### Deployment created! :rocket:\n[Deployment progress](https://fasit.nais.io/deployments)\n');
+    const summaryLines = ['### Deployment created! :rocket:\n'];
+    for (let i = 0; i < targets.length; i++) {
+      const { target, wait } = targets[i];
+      const label = formatTarget(target);
+      console.log(`Deploying to ${label} (wait=${wait})`);
+      const payload = buildPayload({ chart, version, target, wait, owner, repo, sha });
+      console.log('JSON:', JSON.stringify(payload));
+      await postDeployment(endpoint, token, payload);
+      summaryLines.push(`- Deployment created for ${label} (wait=${wait})\n`);
+    }
+    summaryLines.push('[Deployment progress](https://fasit.nais.io/deployments)\n');
+    writeStepSummary(summaryLines.join(''));
 
     console.log('Deployment progress: https://fasit.nais.io/deployments');
   } catch (err) {
@@ -191,4 +243,7 @@ async function main() {
 
 if (require.main === module) main();
 
-module.exports = { readInput, parseBoolean, parseTarget, requireEnv, fetchOidcToken, buildPayload, postDeployment, writeStepSummary, main };
+module.exports = {
+  readInput, requireEnv, resolveTargets, validateEntry,
+  fetchOidcToken, buildPayload, postDeployment, writeStepSummary, formatTarget, main,
+};

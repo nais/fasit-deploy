@@ -17,15 +17,35 @@ jobs:
         with:
           chart: # OCI Chart URL
           version: # Chart version
-          target: '{"kind":"management","tenant":"nav"}'
+          targets: |
+            [
+              { "target": { "kind": "management", "tenant": "ci" }, "wait": true },
+              { "target": { "kind": "management", "tenant": "nav" }, "wait": false }
+            ]
 ```
 
-## Target environments
+Alternatively, point at a JSON file in your repository:
 
-The `target` input is required and must be a JSON object whose keys and values match Fasit environment labels.
+```yaml
+      - uses: nais/fasit-deploy@v4
+        with:
+          chart: # OCI Chart URL
+          version: # Chart version
+          targets-file: ./targets.json
+```
+
+`targets` and `targets-file` are mutually exclusive; provide exactly one.
+
+## Targets
+
+Each entry in the `targets` list is an object with two keys:
+
+- `target` — a JSON object whose keys and values match Fasit environment labels. An empty object `{}` matches no filters.
+- `wait` — a boolean indicating whether the action should wait for that deployment to finish before returning.
+
+The action POSTs one deployment to Fasit per entry, in order. If any deployment fails, the action exits non-zero and does not attempt subsequent entries.
+
 Environment labels can be found in [Fasit](https://fasit.nais.io/labels).
-
-An empty object `{}` deploys to all environments matching no filters.
 
 ## How it works
 
@@ -55,15 +75,15 @@ The action will authenticate with fasit using an [openIDConnect token](https://d
 
 Breaking changes from v3 to v4:
 
-- **Removed inputs**: `google_service_account`, `workload_identity_provider`, `all-environments`, `global`, and `skip-ci` are no longer accepted.
+- **Removed inputs**: `google_service_account`, `workload_identity_provider`, `all-environments`, `global`, `skip-ci`, `target`, and `wait` are no longer accepted.
 - **Removed feature**: Automatic `target` resolution from `chart/Feature.yaml` via helm pull is gone. The action no longer downloads the Helm chart or reads `Feature.yaml`.
-- **`target` is now required**: Must be a valid JSON object (e.g. `'{"kind":"management","tenant":"nav"}'`). An empty object `{}` is accepted and deploys to all environments.
+- **New input shape**: A list of deployments is now provided via `targets` (inline JSON string) or `targets-file` (path to a JSON file). Each entry has its own `target` object and `wait` boolean. The action POSTs one deployment per entry, sequentially.
 - **Action runtime changed**: The action now runs as a Node.js action (`using: node24`) instead of a composite shell action. No external tools (helm, gcloud) are required on the runner.
 - **Whitespace handling**: `chart` and `version` inputs are now trimmed at the ends only (`.trim()`), rather than having all whitespace stripped as in v3.
 
 **To migrate from v3:**
 
-1. Set `target` explicitly in your workflow `with:` block.
+1. Replace your single `target` and `wait` inputs with a `targets` (or `targets-file`) input containing a JSON array of `{target, wait}` entries.
 2. Remove `google_service_account`, `workload_identity_provider`, `all-environments`, `global`, and `skip-ci` from your `with:` block.
-3. If you previously relied on automatic `target` resolution from `Feature.yaml`, add a pre-step to read and pass the target value yourself.
+3. If you previously relied on automatic `target` resolution from `Feature.yaml`, add a pre-step that produces the `targets` JSON yourself.
 4. Update the action reference from `nais/fasit-deploy@v3` to `nais/fasit-deploy@v4`.

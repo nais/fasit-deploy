@@ -9,15 +9,19 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 
 const {
-  readInput, parseBoolean, parseTarget, requireEnv,
-  fetchOidcToken, buildPayload, postDeployment, writeStepSummary, main,
+  readInput, requireEnv, resolveTargets, validateEntry,
+  fetchOidcToken, buildPayload, postDeployment, writeStepSummary, formatTarget, main,
 } = require('../src/index.js');
 
 const TOKEN = 'test-oidc-token-value-xyz';
 const CHART = 'oci://ghcr.io/example/myapp';
 const VERSION = '1.2.3';
-const TARGET = { kind: 'management', tenant: 'nav' };
-const TARGET_STR = '{"kind":"management","tenant":"nav"}';
+const TARGET_A = { kind: 'management', tenant: 'ci' };
+const TARGET_B = { kind: 'management', tenant: 'nav' };
+const TARGETS_JSON = JSON.stringify([
+  { target: TARGET_A, wait: true },
+  { target: TARGET_B, wait: false },
+]);
 const OWNER = 'nais';
 const REPO_FULL = 'nais/fasit-deploy';
 const SHA = 'abc123def456';
@@ -47,50 +51,14 @@ test('readInput', async (t) => {
     assert.equal(readInput('foo'), 'bar');
     delete process.env['INPUT_FOO'];
   });
-  await t.test('preserves hyphens: INPUT_MY-INPUT for "my-input"', () => {
-    process.env['INPUT_MY-INPUT'] = 'true';
-    assert.equal(readInput('my-input'), 'true');
-    delete process.env['INPUT_MY-INPUT'];
+  await t.test('preserves hyphens: INPUT_TARGETS-FILE for "targets-file"', () => {
+    process.env['INPUT_TARGETS-FILE'] = '/tmp/x.json';
+    assert.equal(readInput('targets-file'), '/tmp/x.json');
+    delete process.env['INPUT_TARGETS-FILE'];
   });
   await t.test('returns empty string when unset', () => {
     delete process.env['INPUT_MISSING_XYZ'];
     assert.equal(readInput('missing_xyz'), '');
-  });
-});
-
-test('parseBoolean', async (t) => {
-  await t.test('parses "true" variants', () => {
-    assert.equal(parseBoolean('true', 'f'), true);
-    assert.equal(parseBoolean('TRUE', 'f'), true);
-    assert.equal(parseBoolean('True', 'f'), true);
-  });
-  await t.test('parses "false" variants', () => {
-    assert.equal(parseBoolean('false', 'f'), false);
-    assert.equal(parseBoolean('FALSE', 'f'), false);
-  });
-  await t.test('throws on invalid values with fieldName in message', () => {
-    for (const v of ['', 'yes', '1', 'foo']) {
-      assert.throws(() => parseBoolean(v, 'myfield'), (err) => {
-        assert.ok(err.message.includes('myfield'), `message should contain fieldName for value "${v}"`);
-        return true;
-      });
-    }
-  });
-});
-
-test('parseTarget', async (t) => {
-  await t.test('accepts valid objects', () => {
-    assert.deepEqual(parseTarget('{}'), {});
-    assert.deepEqual(parseTarget('{"k":"v"}'), { k: 'v' });
-    assert.deepEqual(parseTarget('  {"a":1}  '), { a: 1 });
-  });
-  await t.test('throws on invalid inputs with "target" in message', () => {
-    for (const v of ['', '   ', 'not-json', '[]', 'null', '"string"', '42']) {
-      assert.throws(() => parseTarget(v), (err) => {
-        assert.ok(err.message.toLowerCase().includes('target'), `message should contain "target" for input "${v}"`);
-        return true;
-      });
-    }
   });
 });
 
@@ -109,11 +77,88 @@ test('requireEnv', async (t) => {
   });
 });
 
+test('validateEntry', async (t) => {
+  await t.test('accepts valid entry', () => {
+    assert.doesNotThrow(() => validateEntry({ target: { k: 'v' }, wait: true }, 0, 'src'));
+    assert.doesNotThrow(() => validateEntry({ target: {}, wait: false }, 0, 'src'));
+  });
+  await t.test('rejects non-object entry', () => {
+    for (const v of [null, [], 'x', 42]) {
+      assert.throws(() => validateEntry(v, 0, 'src'), /target.*wait/);
+    }
+  });
+  await t.test('rejects bad target', () => {
+    assert.throws(() => validateEntry({ target: null, wait: true }, 1, 'src'), /target/);
+    assert.throws(() => validateEntry({ target: [], wait: true }, 1, 'src'), /target/);
+    assert.throws(() => validateEntry({ target: 'x', wait: true }, 1, 'src'), /target/);
+  });
+  await t.test('rejects non-boolean wait', () => {
+    assert.throws(() => validateEntry({ target: {}, wait: 'true' }, 2, 'src'), /wait/);
+    assert.throws(() => validateEntry({ target: {}, wait: 1 }, 2, 'src'), /wait/);
+  });
+});
+
+test('resolveTargets', async (t) => {
+  await t.test('parses inline JSON', () => {
+    const result = resolveTargets(TARGETS_JSON, '');
+    assert.deepEqual(result, JSON.parse(TARGETS_JSON));
+  });
+
+  await t.test('reads from file', () => {
+    const tmp = path.join(os.tmpdir(), `targets-${Date.now()}.json`);
+    fs.writeFileSync(tmp, TARGETS_JSON);
+    try {
+      const result = resolveTargets('', tmp);
+      assert.deepEqual(result, JSON.parse(TARGETS_JSON));
+    } finally {
+      fs.unlinkSync(tmp);
+    }
+  });
+
+  await t.test('throws when both set', () => {
+    assert.throws(() => resolveTargets(TARGETS_JSON, '/some/path'), /mutually exclusive/);
+  });
+
+  await t.test('throws when neither set', () => {
+    assert.throws(() => resolveTargets('', ''), /required/);
+    assert.throws(() => resolveTargets('   ', '  '), /required/);
+  });
+
+  await t.test('throws on invalid JSON', () => {
+    assert.throws(() => resolveTargets('not-json', ''), /not valid JSON/);
+  });
+
+  await t.test('throws on non-array', () => {
+    assert.throws(() => resolveTargets('{}', ''), /JSON array/);
+    assert.throws(() => resolveTargets('null', ''), /JSON array/);
+    assert.throws(() => resolveTargets('"x"', ''), /JSON array/);
+  });
+
+  await t.test('throws on empty array', () => {
+    assert.throws(() => resolveTargets('[]', ''), /at least one entry/);
+  });
+
+  await t.test('throws when file does not exist', () => {
+    assert.throws(() => resolveTargets('', '/nonexistent/path/xyz.json'), /Failed to read targets-file/);
+  });
+
+  await t.test('error includes index for bad entry', () => {
+    const bad = JSON.stringify([{ target: TARGET_A, wait: true }, { target: 'oops', wait: true }]);
+    assert.throws(() => resolveTargets(bad, ''), /\[1\]\.target/);
+  });
+});
+
+test('formatTarget', () => {
+  assert.equal(formatTarget({}), '{}');
+  assert.equal(formatTarget({ kind: 'management', tenant: 'nav' }), '{kind: management, tenant: nav}');
+  assert.equal(formatTarget({ b: 2, a: 1 }), '{a: 1, b: 2}');
+});
+
 test('buildPayload', () => {
-  const result = buildPayload({ chart: CHART, version: VERSION, target: TARGET, wait: true, owner: OWNER, repo: 'fasit-deploy', sha: SHA });
+  const result = buildPayload({ chart: CHART, version: VERSION, target: TARGET_A, wait: true, owner: OWNER, repo: 'fasit-deploy', sha: SHA });
   assert.deepEqual(result, {
     ci: { wait: true },
-    target: TARGET,
+    target: TARGET_A,
     chart: CHART,
     version: VERSION,
     ref: { owner: OWNER, repo: 'fasit-deploy', ref: SHA },
@@ -178,7 +223,7 @@ test('postDeployment', async (t) => {
     });
     t.after(() => new Promise((r) => server.close(r)));
     const port = server.address().port;
-    const payload = buildPayload({ chart: CHART, version: VERSION, target: TARGET, wait: true, owner: OWNER, repo: 'fasit-deploy', sha: SHA });
+    const payload = buildPayload({ chart: CHART, version: VERSION, target: TARGET_A, wait: true, owner: OWNER, repo: 'fasit-deploy', sha: SHA });
     await postDeployment(`http://127.0.0.1:${port}`, TOKEN, payload);
     assert.equal(capturedHeaders['authorization'], `Bearer ${TOKEN}`);
     assert.ok(capturedHeaders['content-type'].includes('application/json'));
@@ -219,12 +264,12 @@ test('writeStepSummary', async (t) => {
   });
 });
 
-test('main() happy path', async (t) => {
+test('main() happy path posts once per target', async (t) => {
   let oidcServer, fasitServer;
-  let capturedFasitBody;
+  const capturedPosts = [];
   const tmpSummary = path.join(os.tmpdir(), `summary-${Date.now()}.txt`);
   const savedEnv = {};
-  const envKeys = ['INPUT_ENDPOINT', 'INPUT_CHART', 'INPUT_VERSION', 'INPUT_TARGET', 'INPUT_WAIT', 'GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_OWNER', 'GITHUB_SHA', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_URL', 'GITHUB_STEP_SUMMARY'];
+  const envKeys = ['INPUT_ENDPOINT', 'INPUT_CHART', 'INPUT_VERSION', 'INPUT_TARGETS', 'INPUT_TARGETS-FILE', 'GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_OWNER', 'GITHUB_SHA', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_URL', 'GITHUB_STEP_SUMMARY'];
 
   t.after(async () => {
     for (const k of envKeys) {
@@ -245,7 +290,7 @@ test('main() happy path', async (t) => {
     let body = '';
     req.on('data', (d) => { body += d; });
     req.on('end', () => {
-      capturedFasitBody = body;
+      capturedPosts.push(JSON.parse(body));
       res.writeHead(200);
       res.end('ok');
     });
@@ -256,8 +301,8 @@ test('main() happy path', async (t) => {
   process.env['INPUT_ENDPOINT'] = `http://127.0.0.1:${fasitServer.address().port}`;
   process.env['INPUT_CHART'] = CHART;
   process.env['INPUT_VERSION'] = VERSION;
-  process.env['INPUT_TARGET'] = TARGET_STR;
-  process.env['INPUT_WAIT'] = 'true';
+  process.env['INPUT_TARGETS'] = TARGETS_JSON;
+  delete process.env['INPUT_TARGETS-FILE'];
   process.env['GITHUB_REPOSITORY'] = REPO_FULL;
   process.env['GITHUB_REPOSITORY_OWNER'] = OWNER;
   process.env['GITHUB_SHA'] = SHA;
@@ -278,8 +323,9 @@ test('main() happy path', async (t) => {
 
   assert.ok(!process.exitCode, `exitCode should be 0/undefined, got ${process.exitCode}`);
 
-  const expectedPayload = buildPayload({ chart: CHART, version: VERSION, target: TARGET, wait: true, owner: OWNER, repo: 'fasit-deploy', sha: SHA });
-  assert.deepEqual(JSON.parse(capturedFasitBody), expectedPayload);
+  assert.equal(capturedPosts.length, 2, 'should POST once per target');
+  assert.deepEqual(capturedPosts[0], buildPayload({ chart: CHART, version: VERSION, target: TARGET_A, wait: true, owner: OWNER, repo: 'fasit-deploy', sha: SHA }));
+  assert.deepEqual(capturedPosts[1], buildPayload({ chart: CHART, version: VERSION, target: TARGET_B, wait: false, owner: OWNER, repo: 'fasit-deploy', sha: SHA }));
 
   for (const entry of logged) {
     assert.ok(!entry.includes(TOKEN), `Token leaked in log: ${entry}`);
@@ -287,12 +333,117 @@ test('main() happy path', async (t) => {
 
   const summary = fs.readFileSync(tmpSummary, 'utf8');
   assert.ok(summary.includes('### Deployment created!'));
+  assert.ok(summary.includes('kind: management'));
+  assert.ok(summary.includes('tenant: ci'));
+  assert.ok(summary.includes('tenant: nav'));
   assert.ok(summary.includes('fasit.nais.io/deployments'));
+});
+
+test('main() reads targets-file', async (t) => {
+  let oidcServer, fasitServer;
+  const capturedPosts = [];
+  const tmpFile = path.join(os.tmpdir(), `targets-${Date.now()}.json`);
+  fs.writeFileSync(tmpFile, JSON.stringify([{ target: TARGET_A, wait: true }]));
+
+  const savedEnv = {};
+  const envKeys = ['INPUT_ENDPOINT', 'INPUT_CHART', 'INPUT_VERSION', 'INPUT_TARGETS', 'INPUT_TARGETS-FILE', 'GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_OWNER', 'GITHUB_SHA', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_URL', 'GITHUB_STEP_SUMMARY'];
+
+  t.after(async () => {
+    for (const k of envKeys) {
+      if (savedEnv[k] === undefined) delete process.env[k];
+      else process.env[k] = savedEnv[k];
+    }
+    process.exitCode = undefined;
+    fs.unlinkSync(tmpFile);
+    await new Promise((r) => oidcServer.close(r));
+    await new Promise((r) => fasitServer.close(r));
+  });
+
+  oidcServer = await startServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ value: TOKEN }));
+  });
+  fasitServer = await startServer((req, res) => {
+    let body = '';
+    req.on('data', (d) => { body += d; });
+    req.on('end', () => {
+      capturedPosts.push(JSON.parse(body));
+      res.writeHead(200);
+      res.end('ok');
+    });
+  });
+
+  for (const k of envKeys) savedEnv[k] = process.env[k];
+
+  process.env['INPUT_ENDPOINT'] = `http://127.0.0.1:${fasitServer.address().port}`;
+  process.env['INPUT_CHART'] = CHART;
+  process.env['INPUT_VERSION'] = VERSION;
+  delete process.env['INPUT_TARGETS'];
+  process.env['INPUT_TARGETS-FILE'] = tmpFile;
+  process.env['GITHUB_REPOSITORY'] = REPO_FULL;
+  process.env['GITHUB_REPOSITORY_OWNER'] = OWNER;
+  process.env['GITHUB_SHA'] = SHA;
+  process.env['ACTIONS_ID_TOKEN_REQUEST_TOKEN'] = 'test-request-token';
+  process.env['ACTIONS_ID_TOKEN_REQUEST_URL'] = `http://127.0.0.1:${oidcServer.address().port}`;
+
+  await main();
+
+  assert.ok(!process.exitCode);
+  assert.equal(capturedPosts.length, 1);
+  assert.deepEqual(capturedPosts[0].target, TARGET_A);
+});
+
+test('main() aborts on first POST failure', async (t) => {
+  let oidcServer, fasitServer;
+  let postCount = 0;
+  const savedEnv = {};
+  const envKeys = ['INPUT_ENDPOINT', 'INPUT_CHART', 'INPUT_VERSION', 'INPUT_TARGETS', 'INPUT_TARGETS-FILE', 'GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_OWNER', 'GITHUB_SHA', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_URL'];
+
+  t.after(async () => {
+    for (const k of envKeys) {
+      if (savedEnv[k] === undefined) delete process.env[k];
+      else process.env[k] = savedEnv[k];
+    }
+    process.exitCode = undefined;
+    await new Promise((r) => oidcServer.close(r));
+    await new Promise((r) => fasitServer.close(r));
+  });
+
+  oidcServer = await startServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ value: TOKEN }));
+  });
+  fasitServer = await startServer((req, res) => {
+    postCount++;
+    res.writeHead(500);
+    res.end('boom');
+  });
+
+  for (const k of envKeys) savedEnv[k] = process.env[k];
+
+  process.env['INPUT_ENDPOINT'] = `http://127.0.0.1:${fasitServer.address().port}`;
+  process.env['INPUT_CHART'] = CHART;
+  process.env['INPUT_VERSION'] = VERSION;
+  process.env['INPUT_TARGETS'] = TARGETS_JSON;
+  delete process.env['INPUT_TARGETS-FILE'];
+  process.env['GITHUB_REPOSITORY'] = REPO_FULL;
+  process.env['GITHUB_REPOSITORY_OWNER'] = OWNER;
+  process.env['GITHUB_SHA'] = SHA;
+  process.env['ACTIONS_ID_TOKEN_REQUEST_TOKEN'] = 'test-request-token';
+  process.env['ACTIONS_ID_TOKEN_REQUEST_URL'] = `http://127.0.0.1:${oidcServer.address().port}`;
+
+  const origErr = console.error;
+  console.error = () => {};
+  await main();
+  console.error = origErr;
+
+  assert.equal(process.exitCode, 1);
+  assert.equal(postCount, 1, 'should abort after first failure, not POST again');
 });
 
 test('smoke: subprocess happy path', async (t) => {
   let oidcServer, fasitServer;
-  let capturedFasitBody;
+  const capturedPosts = [];
 
   t.after(async () => {
     await new Promise((r) => oidcServer.close(r));
@@ -307,7 +458,7 @@ test('smoke: subprocess happy path', async (t) => {
     let body = '';
     req.on('data', (d) => { body += d; });
     req.on('end', () => {
-      capturedFasitBody = body;
+      capturedPosts.push(JSON.parse(body));
       res.writeHead(200);
       res.end('ok');
     });
@@ -317,8 +468,7 @@ test('smoke: subprocess happy path', async (t) => {
     INPUT_ENDPOINT: `http://127.0.0.1:${fasitServer.address().port}`,
     INPUT_CHART: CHART,
     INPUT_VERSION: VERSION,
-    INPUT_TARGET: TARGET_STR,
-    INPUT_WAIT: 'true',
+    INPUT_TARGETS: TARGETS_JSON,
     GITHUB_REPOSITORY: REPO_FULL,
     GITHUB_REPOSITORY_OWNER: OWNER,
     GITHUB_SHA: SHA,
@@ -335,8 +485,9 @@ test('smoke: subprocess happy path', async (t) => {
   assert.ok(!stdout.includes(TOKEN), 'Token leaked in stdout');
   assert.ok(!stderr.includes(TOKEN), 'Token leaked in stderr');
 
-  const expectedPayload = buildPayload({ chart: CHART, version: VERSION, target: TARGET, wait: true, owner: OWNER, repo: 'fasit-deploy', sha: SHA });
-  assert.deepEqual(JSON.parse(capturedFasitBody), expectedPayload);
+  assert.equal(capturedPosts.length, 2);
+  assert.deepEqual(capturedPosts[0].target, TARGET_A);
+  assert.deepEqual(capturedPosts[1].target, TARGET_B);
 });
 
 test('smoke: subprocess failure paths', async (t) => {
@@ -362,8 +513,7 @@ test('smoke: subprocess failure paths', async (t) => {
     INPUT_ENDPOINT: `http://127.0.0.1:${fasitServer.address().port}`,
     INPUT_CHART: CHART,
     INPUT_VERSION: VERSION,
-    INPUT_TARGET: TARGET_STR,
-    INPUT_WAIT: 'true',
+    INPUT_TARGETS: TARGETS_JSON,
     GITHUB_REPOSITORY: REPO_FULL,
     GITHUB_REPOSITORY_OWNER: OWNER,
     GITHUB_SHA: SHA,
@@ -375,7 +525,10 @@ test('smoke: subprocess failure paths', async (t) => {
     { name: 'missing OIDC token', env: { ...baseEnv, ACTIONS_ID_TOKEN_REQUEST_TOKEN: '' }, keyword: 'ACTIONS_ID_TOKEN_REQUEST_TOKEN', file: 'task-2-failure-1.log' },
     { name: 'empty chart', env: { ...baseEnv, INPUT_CHART: '' }, keyword: 'chart', file: 'task-2-failure-2.log' },
     { name: 'empty version', env: { ...baseEnv, INPUT_VERSION: '' }, keyword: 'version', file: 'task-2-failure-3.log' },
-    { name: 'invalid target JSON', env: { ...baseEnv, INPUT_TARGET: 'not-json' }, keyword: 'target', file: 'task-2-failure-4.log' },
+    { name: 'invalid targets JSON', env: { ...baseEnv, INPUT_TARGETS: 'not-json' }, keyword: 'targets', file: 'task-2-failure-4.log' },
+    { name: 'targets is not an array', env: { ...baseEnv, INPUT_TARGETS: '{}' }, keyword: 'array', file: 'task-2-failure-5.log' },
+    { name: 'empty targets array', env: { ...baseEnv, INPUT_TARGETS: '[]' }, keyword: 'at least one', file: 'task-2-failure-6.log' },
+    { name: 'neither targets nor targets-file', env: { ...baseEnv, INPUT_TARGETS: '' }, keyword: 'targets', file: 'task-2-failure-7.log' },
   ];
 
   for (const c of cases) {
@@ -387,14 +540,22 @@ test('smoke: subprocess failure paths', async (t) => {
     });
   }
 
+  await t.test('both targets and targets-file set', async () => {
+    const env = { ...baseEnv, 'INPUT_TARGETS-FILE': '/some/path.json' };
+    const { code, stderr } = await spawnScript(env);
+    fs.writeFileSync(path.join(evidenceDir, 'task-2-failure-both.log'), stderr);
+    assert.notEqual(code, 0);
+    assert.ok(stderr.includes('mutually exclusive'), `Got: ${stderr}`);
+  });
+
   await t.test('fasit returns 500', async () => {
     const failFasit = await startServer((req, res) => { res.writeHead(500); res.end('server error'); });
     t.after(() => new Promise((r) => failFasit.close(r)));
     const env = { ...baseEnv, INPUT_ENDPOINT: `http://127.0.0.1:${failFasit.address().port}` };
     const { code, stderr } = await spawnScript(env);
-    fs.writeFileSync(path.join(evidenceDir, 'task-2-failure-5.log'), stderr);
+    fs.writeFileSync(path.join(evidenceDir, 'task-2-failure-fasit500.log'), stderr);
     assert.notEqual(code, 0);
-    assert.ok(stderr.includes('500'), `Expected "500" in stderr. Got: ${stderr}`);
+    assert.ok(stderr.includes('500'), `Got: ${stderr}`);
   });
 
   await t.test('oidc returns 401', async () => {
@@ -402,8 +563,8 @@ test('smoke: subprocess failure paths', async (t) => {
     t.after(() => new Promise((r) => failOidc.close(r)));
     const env = { ...baseEnv, ACTIONS_ID_TOKEN_REQUEST_URL: `http://127.0.0.1:${failOidc.address().port}` };
     const { code, stderr } = await spawnScript(env);
-    fs.writeFileSync(path.join(evidenceDir, 'task-2-failure-6.log'), stderr);
+    fs.writeFileSync(path.join(evidenceDir, 'task-2-failure-oidc401.log'), stderr);
     assert.notEqual(code, 0);
-    assert.ok(stderr.includes('401'), `Expected "401" in stderr. Got: ${stderr}`);
+    assert.ok(stderr.includes('401'), `Got: ${stderr}`);
   });
 });

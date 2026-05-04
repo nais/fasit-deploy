@@ -1,0 +1,4 @@
+[
+  { "target": { "kind": "management", "tenant": "ci" }, "wait": true },
+  { "target": { "kind": "management", "tenant": "nav" }, "wait": false }
+]
