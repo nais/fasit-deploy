@@ -47,10 +47,10 @@ test('readInput', async (t) => {
     assert.equal(readInput('foo'), 'bar');
     delete process.env['INPUT_FOO'];
   });
-  await t.test('preserves hyphens: INPUT_SKIP-CI for "skip-ci"', () => {
-    process.env['INPUT_SKIP-CI'] = 'true';
-    assert.equal(readInput('skip-ci'), 'true');
-    delete process.env['INPUT_SKIP-CI'];
+  await t.test('preserves hyphens: INPUT_MY-INPUT for "my-input"', () => {
+    process.env['INPUT_MY-INPUT'] = 'true';
+    assert.equal(readInput('my-input'), 'true');
+    delete process.env['INPUT_MY-INPUT'];
   });
   await t.test('returns empty string when unset', () => {
     delete process.env['INPUT_MISSING_XYZ'];
@@ -110,10 +110,9 @@ test('requireEnv', async (t) => {
 });
 
 test('buildPayload', () => {
-  const result = buildPayload({ chart: CHART, version: VERSION, target: TARGET, global: true, skipCi: false, wait: true, owner: OWNER, repo: 'fasit-deploy', sha: SHA });
+  const result = buildPayload({ chart: CHART, version: VERSION, target: TARGET, wait: true, owner: OWNER, repo: 'fasit-deploy', sha: SHA });
   assert.deepEqual(result, {
-    ci: { skip: false, wait: true },
-    global: true,
+    ci: { wait: true },
     target: TARGET,
     chart: CHART,
     version: VERSION,
@@ -179,7 +178,7 @@ test('postDeployment', async (t) => {
     });
     t.after(() => new Promise((r) => server.close(r)));
     const port = server.address().port;
-    const payload = buildPayload({ chart: CHART, version: VERSION, target: TARGET, global: true, skipCi: false, wait: true, owner: OWNER, repo: 'fasit-deploy', sha: SHA });
+    const payload = buildPayload({ chart: CHART, version: VERSION, target: TARGET, wait: true, owner: OWNER, repo: 'fasit-deploy', sha: SHA });
     await postDeployment(`http://127.0.0.1:${port}`, TOKEN, payload);
     assert.equal(capturedHeaders['authorization'], `Bearer ${TOKEN}`);
     assert.ok(capturedHeaders['content-type'].includes('application/json'));
@@ -225,7 +224,7 @@ test('main() happy path', async (t) => {
   let capturedFasitBody;
   const tmpSummary = path.join(os.tmpdir(), `summary-${Date.now()}.txt`);
   const savedEnv = {};
-  const envKeys = ['INPUT_ENDPOINT', 'INPUT_CHART', 'INPUT_VERSION', 'INPUT_TARGET', 'INPUT_GLOBAL', 'INPUT_SKIP-CI', 'INPUT_WAIT', 'GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_OWNER', 'GITHUB_SHA', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_URL', 'GITHUB_STEP_SUMMARY'];
+  const envKeys = ['INPUT_ENDPOINT', 'INPUT_CHART', 'INPUT_VERSION', 'INPUT_TARGET', 'INPUT_WAIT', 'GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_OWNER', 'GITHUB_SHA', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_URL', 'GITHUB_STEP_SUMMARY'];
 
   t.after(async () => {
     for (const k of envKeys) {
@@ -258,8 +257,6 @@ test('main() happy path', async (t) => {
   process.env['INPUT_CHART'] = CHART;
   process.env['INPUT_VERSION'] = VERSION;
   process.env['INPUT_TARGET'] = TARGET_STR;
-  process.env['INPUT_GLOBAL'] = 'true';
-  process.env['INPUT_SKIP-CI'] = 'false';
   process.env['INPUT_WAIT'] = 'true';
   process.env['GITHUB_REPOSITORY'] = REPO_FULL;
   process.env['GITHUB_REPOSITORY_OWNER'] = OWNER;
@@ -281,7 +278,7 @@ test('main() happy path', async (t) => {
 
   assert.ok(!process.exitCode, `exitCode should be 0/undefined, got ${process.exitCode}`);
 
-  const expectedPayload = buildPayload({ chart: CHART, version: VERSION, target: TARGET, global: true, skipCi: false, wait: true, owner: OWNER, repo: 'fasit-deploy', sha: SHA });
+  const expectedPayload = buildPayload({ chart: CHART, version: VERSION, target: TARGET, wait: true, owner: OWNER, repo: 'fasit-deploy', sha: SHA });
   assert.deepEqual(JSON.parse(capturedFasitBody), expectedPayload);
 
   for (const entry of logged) {
@@ -321,8 +318,6 @@ test('smoke: subprocess happy path', async (t) => {
     INPUT_CHART: CHART,
     INPUT_VERSION: VERSION,
     INPUT_TARGET: TARGET_STR,
-    INPUT_GLOBAL: 'true',
-    'INPUT_SKIP-CI': 'false',
     INPUT_WAIT: 'true',
     GITHUB_REPOSITORY: REPO_FULL,
     GITHUB_REPOSITORY_OWNER: OWNER,
@@ -340,7 +335,7 @@ test('smoke: subprocess happy path', async (t) => {
   assert.ok(!stdout.includes(TOKEN), 'Token leaked in stdout');
   assert.ok(!stderr.includes(TOKEN), 'Token leaked in stderr');
 
-  const expectedPayload = buildPayload({ chart: CHART, version: VERSION, target: TARGET, global: true, skipCi: false, wait: true, owner: OWNER, repo: 'fasit-deploy', sha: SHA });
+  const expectedPayload = buildPayload({ chart: CHART, version: VERSION, target: TARGET, wait: true, owner: OWNER, repo: 'fasit-deploy', sha: SHA });
   assert.deepEqual(JSON.parse(capturedFasitBody), expectedPayload);
 });
 
@@ -368,8 +363,6 @@ test('smoke: subprocess failure paths', async (t) => {
     INPUT_CHART: CHART,
     INPUT_VERSION: VERSION,
     INPUT_TARGET: TARGET_STR,
-    INPUT_GLOBAL: 'true',
-    'INPUT_SKIP-CI': 'false',
     INPUT_WAIT: 'true',
     GITHUB_REPOSITORY: REPO_FULL,
     GITHUB_REPOSITORY_OWNER: OWNER,

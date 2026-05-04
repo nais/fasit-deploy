@@ -88,8 +88,7 @@ async function fetchOidcToken(requestUrl, requestToken) {
 
 /**
  * @typedef {Object} DeployPayload
- * @property {{ skip: boolean, wait: boolean }} ci
- * @property {boolean} global
+ * @property {{ wait: boolean }} ci
  * @property {Object} target
  * @property {string} chart
  * @property {string} version
@@ -98,13 +97,12 @@ async function fetchOidcToken(requestUrl, requestToken) {
 
 /**
  * Builds the deployment request payload matching the Fasit API contract.
- * @param {{ chart: string, version: string, target: Object, global: boolean, skipCi: boolean, wait: boolean, owner: string, repo: string, sha: string }} params
+ * @param {{ chart: string, version: string, target: Object, wait: boolean, owner: string, repo: string, sha: string }} params
  * @returns {DeployPayload}
  */
-function buildPayload({ chart, version, target, global: isGlobal, skipCi, wait, owner, repo, sha }) {
+function buildPayload({ chart, version, target, wait, owner, repo, sha }) {
   return {
-    ci: { skip: skipCi, wait: wait },
-    global: isGlobal,
+    ci: { wait: wait },
     target: target,
     chart: chart,
     version: version,
@@ -163,8 +161,6 @@ async function main() {
     if (!version) throw new Error('Input "version" is required and must not be empty');
 
     const target = parseTarget(readInput('target'));
-    const isGlobal = parseBoolean(readInput('global'), 'global');
-    const skipCi = parseBoolean(readInput('skip-ci'), 'skip-ci');
     const wait = parseBoolean(readInput('wait'), 'wait');
 
     const repository = requireEnv('GITHUB_REPOSITORY');
@@ -179,7 +175,7 @@ async function main() {
     const token = await fetchOidcToken(oidcUrl, oidcToken);
 
     console.log('Deploying new version');
-    const payload = buildPayload({ chart, version, target, global: isGlobal, skipCi, wait, owner, repo, sha });
+    const payload = buildPayload({ chart, version, target, wait, owner, repo, sha });
     console.log('JSON:', JSON.stringify(payload));
 
     await postDeployment(endpoint, token, payload);

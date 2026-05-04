@@ -55,7 +55,7 @@ The action will authenticate with fasit using an [openIDConnect token](https://d
 
 Breaking changes from v3 to v4:
 
-- **Removed inputs**: `google_service_account`, `workload_identity_provider`, and `all-environments` are no longer accepted.
+- **Removed inputs**: `google_service_account`, `workload_identity_provider`, `all-environments`, `global`, and `skip-ci` are no longer accepted.
 - **Removed feature**: Automatic `target` resolution from `chart/Feature.yaml` via helm pull is gone. The action no longer downloads the Helm chart or reads `Feature.yaml`.
 - **`target` is now required**: Must be a valid JSON object (e.g. `'{"kind":"management","tenant":"nav"}'`). An empty object `{}` is accepted and deploys to all environments.
 - **Action runtime changed**: The action now runs as a Node.js action (`using: node24`) instead of a composite shell action. No external tools (helm, gcloud) are required on the runner.
@@ -64,6 +64,6 @@ Breaking changes from v3 to v4:
 **To migrate from v3:**
 
 1. Set `target` explicitly in your workflow `with:` block.
-2. Remove `google_service_account`, `workload_identity_provider`, and `all-environments` from your `with:` block.
+2. Remove `google_service_account`, `workload_identity_provider`, `all-environments`, `global`, and `skip-ci` from your `with:` block.
 3. If you previously relied on automatic `target` resolution from `Feature.yaml`, add a pre-step to read and pass the target value yourself.
 4. Update the action reference from `nais/fasit-deploy@v3` to `nais/fasit-deploy@v4`.
