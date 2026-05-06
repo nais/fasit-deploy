@@ -1,6 +1,6 @@
 # Fasit-deploy action
 
-GitHub Action that deploys a Fasit feature to one or more environments by POSTing a deployment request to Fasit. Authenticates with GitHub OIDC.
+GitHub Action that creates Fasit deployments for a feature. 
 
 ## Requirements
 
@@ -39,7 +39,7 @@ Or read the targets from a file in the repository:
           targets-file: ./.github/fasit-targets.json
 ```
 
-`targets` and `targets-file` are mutually exclusive; provide exactly one.
+`targets` and `targets-file` are mutually exclusive.
 
 ## Inputs
 
@@ -56,8 +56,8 @@ Or read the targets from a file in the repository:
 Each entry in the `targets` array is an object:
 
 - `target` (required) — JSON object of label key/value pairs. The deployment matches every Fasit environment whose labels are a superset of this object. `{}` matches all environments.
-- `wait` (optional, default `false`) — when `true`, the action polls Fasit every 10 seconds until that deployment reaches a terminal state (`DEPLOYED` or `DISABLED` for success, `FAILED` for failure) or the timeout is reached.
+- `wait` (optional, default `false`) — when `true`, the action polls Fasit every 10 seconds until that deployment reaches a terminal state or the timeout is reached.
 
-The action POSTs the entries sequentially in array order. If any POST fails, or any `wait: true` entry ends in `FAILED` or times out, the action exits non-zero and does not process the remaining entries.
+The action POSTs the entries sequentially in array order. If any POST fails, or any `wait: true` entry ends in a failed state or times out, the action exits non-zero and does not process the remaining entries.
 
 Look up valid label keys/values in [Fasit](https://fasit.nais.io/labels).
