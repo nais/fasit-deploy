@@ -20,7 +20,7 @@ jobs:
           targets: |
             [
               { "target": { "kind": "management", "tenant": "ci" }, "wait": true },
-              { "target": { "kind": "management", "tenant": "nav" }, "wait": false }
+              { "target": { "kind": "management", "tenant": "nav" } }
             ]
 ```
 
@@ -38,10 +38,10 @@ Alternatively, point at a JSON file in your repository:
 
 ## Targets
 
-Each entry in the `targets` list is an object with two keys:
+Each entry in the `targets` list is an object:
 
-- `target` — a JSON object whose keys and values match Fasit environment labels. An empty object `{}` matches no filters.
-- `wait` — a boolean indicating whether the action should wait for that deployment to reach a terminal state (`DEPLOYED`, `DISABLED`, or `FAILED`) before continuing to the next entry.
+- `target` (required) — a JSON object whose keys and values match Fasit environment labels. An empty object `{}` matches no filters.
+- `wait` (optional, default `false`) — a boolean indicating whether the action should wait for that deployment to reach a terminal state (`DEPLOYED`, `DISABLED`, or `FAILED`) before continuing to the next entry.
 
 The action POSTs one deployment to Fasit per entry, in order. If any deployment POST fails, or any `wait: true` deployment ends up in `FAILED`, the action exits non-zero and does not attempt subsequent entries.
 

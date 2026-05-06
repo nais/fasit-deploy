@@ -62,14 +62,15 @@ function resolveTargets(inline, filePath) {
 function validateEntry(entry, index, source) {
   const at = `${source}[${index}]`;
   if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
-    throw new Error(`${at} must be an object with "target" and "wait" keys`);
+    throw new Error(`${at} must be an object with a "target" key (and optional "wait")`);
   }
-  const { target, wait } = entry;
-  if (target === null || typeof target !== 'object' || Array.isArray(target)) {
+  if (entry.target === null || typeof entry.target !== 'object' || Array.isArray(entry.target)) {
     throw new Error(`${at}.target must be a JSON object`);
   }
-  if (typeof wait !== 'boolean') {
-    throw new Error(`${at}.wait must be a boolean`);
+  if (entry.wait === undefined) {
+    entry.wait = false;
+  } else if (typeof entry.wait !== 'boolean') {
+    throw new Error(`${at}.wait must be a boolean when set`);
   }
 }
 

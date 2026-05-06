@@ -89,9 +89,14 @@ test('validateEntry', async (t) => {
     assert.doesNotThrow(() => validateEntry({ target: { k: 'v' }, wait: true }, 0, 'src'));
     assert.doesNotThrow(() => validateEntry({ target: {}, wait: false }, 0, 'src'));
   });
+  await t.test('defaults wait to false when omitted', () => {
+    const entry = { target: { k: 'v' } };
+    assert.doesNotThrow(() => validateEntry(entry, 0, 'src'));
+    assert.strictEqual(entry.wait, false);
+  });
   await t.test('rejects non-object entry', () => {
     for (const v of [null, [], 'x', 42]) {
-      assert.throws(() => validateEntry(v, 0, 'src'), /target.*wait/);
+      assert.throws(() => validateEntry(v, 0, 'src'), /target/);
     }
   });
   await t.test('rejects bad target', () => {
@@ -99,9 +104,10 @@ test('validateEntry', async (t) => {
     assert.throws(() => validateEntry({ target: [], wait: true }, 1, 'src'), /target/);
     assert.throws(() => validateEntry({ target: 'x', wait: true }, 1, 'src'), /target/);
   });
-  await t.test('rejects non-boolean wait', () => {
+  await t.test('rejects non-boolean wait when set', () => {
     assert.throws(() => validateEntry({ target: {}, wait: 'true' }, 2, 'src'), /wait/);
     assert.throws(() => validateEntry({ target: {}, wait: 1 }, 2, 'src'), /wait/);
+    assert.throws(() => validateEntry({ target: {}, wait: null }, 2, 'src'), /wait/);
   });
 });
 
