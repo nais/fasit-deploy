@@ -55,9 +55,7 @@ Or read the targets from a file in the repository:
 
 Each entry in the `targets` array is an object:
 
-- `target` (required) — JSON object of label key/value pairs. The deployment matches every Fasit environment whose labels are a superset of this object. `{}` matches all environments.
+- `target` (required) — JSON object of label key/value pairs. The deployment matches every Fasit environment whose labels are a superset of this object. `{}` matches all environments. Look up valid label keys/values in [Fasit](https://fasit.nais.io/labels).
 - `wait` (optional, default `false`) — when `true`, the action polls Fasit every 10 seconds until that deployment reaches a terminal state or the timeout is reached.
 
 The action POSTs the entries sequentially in array order. If any POST fails, or any `wait: true` entry ends in a failed state or times out, the action exits non-zero and does not process the remaining entries.
-
-Look up valid label keys/values in [Fasit](https://fasit.nais.io/labels).
