@@ -1,72 +1,63 @@
 # Fasit-deploy action
 
-An action that rolls out a new version of a fasit-feature to all environments.
+GitHub Action that deploys a Fasit feature to one or more environments by POSTing a deployment request to Fasit. Authenticates with GitHub OIDC.
 
-## Preparing the feature in Fasit
+## Requirements
 
-In the feature.yaml file in fasit, you have to explicitly set which github organization and repository who's allowed to upgrade the feature.
-
-```yaml
-rolloutSource:
-  - org: nais
-    repo: up
-```
+- `runs-on: fasit-deploy` (Fasit is not exposed to the internet; this runner sits on the nais-io private network).
+- `permissions: id-token: write` on the job (needed to mint the OIDC token).
+- The OCI chart referenced by `chart` must already be pushed to the feature registry at the given `version`.
 
 ## Usage
 
 ```yaml
-name: Build and deploy image
 jobs:
-  rollout:
-    needs: ["build_and_push"]
+  deploy:
+    needs: [build_push]
     runs-on: fasit-deploy
     permissions:
       id-token: write
     steps:
-      - name: read sha
-        id: sha
-        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-      - uses: nais/fasit-deploy@main
+      - uses: nais/fasit-deploy@v4
         with:
-          json: '{"image": {"tag": "sha-${{ steps.vars.outputs.sha_short }}"}}'
-          feature_name: <feature_name>
+          chart: ${{ env.FEATURE_REPOSITORY }}/${{ env.NAME }}
+          version: ${{ needs.build_push.outputs.version }}
+          targets: |
+            [
+              { "target": { "kind": "management", "tenant": "ci-nais" }, "wait": true },
+              { "target": { "kind": "management" } }
+            ]
 ```
 
-## How it works
+Or read the targets from a file in the repository:
 
-```mermaid
-sequenceDiagram
-    participant Fasit
-    participant Postgres
-    participant Naisd
-    Fasit->>Postgres: create rollout
-    Note right of Postgres: on create - trigger notify
-    Postgres->>Fasit: Rollout, start listen for change
-    Note left of Fasit: update status and old values
-    Fasit->>Postgres: save changes
-    Note left of Fasit: update env config for CI environments
-    Fasit->>Postgres: save changes
-    Note right of Postgres: on update - trigger notify
-    Postgres->>Fasit: Reconciler - listen for change
-    Note left of Fasit: Reconcile environments, find pending rollouts for configuration
-    Fasit->>Naisd: Deploy instructions
-    Note right of Naisd: Do deploy
-    Naisd->>Fasit: Helm status
-    Note left of Fasit: add log to rollout
-
+```yaml
+      - uses: nais/fasit-deploy@v4
+        with:
+          chart: ${{ env.FEATURE_REPOSITORY }}/${{ env.NAME }}
+          version: ${{ needs.build_push.outputs.version }}
+          targets-file: ./.github/fasit-targets.json
 ```
 
-```mermaid
-graph
-    A[Helm Status] --> B(On Failure)
-    A[Helm Status] --> C(On Success)
-    B --> D[mark as failed]
-    B --> E[Roll back]
-    C --> F[Mark as success]
-    C --> G[Set as global]
+`targets` and `targets-file` are mutually exclusive; provide exactly one.
 
-```
+## Inputs
 
-Fasit is not exposed to the internet, so the action runs on a github-runner on the private network in nais-io.
+| Input             | Required | Default | Description |
+| ----------------- | -------- | ------- | ----------- |
+| `chart`           | yes      |         | OCI URL to the feature chart, e.g. `oci://europe-north1-docker.pkg.dev/nais-io/nais/feature/myfeature`. |
+| `version`         | yes      |         | Chart version to deploy. |
+| `targets`         | one of   |         | Inline JSON array of `{target, wait}` entries. |
+| `targets-file`    | one of   |         | Path to a JSON file containing the same array. Resolved relative to the workspace, so `actions/checkout` has to run first. |
+| `timeout-minutes` | no       | `10`    | Per-target wait timeout. Only relevant for entries with `wait: true`. |
 
-The action will authenticate with fasit using an [openIDConnect token](https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/about-security-hardening-with-openid-connect)
+### Target entries
+
+Each entry in the `targets` array is an object:
+
+- `target` (required) — JSON object of label key/value pairs. The deployment matches every Fasit environment whose labels are a superset of this object. `{}` matches all environments.
+- `wait` (optional, default `false`) — when `true`, the action polls Fasit every 10 seconds until that deployment reaches a terminal state (`DEPLOYED` or `DISABLED` for success, `FAILED` for failure) or the timeout is reached.
+
+The action POSTs the entries sequentially in array order. If any POST fails, or any `wait: true` entry ends in `FAILED` or times out, the action exits non-zero and does not process the remaining entries.
+
+Look up valid label keys/values in [Fasit](https://fasit.nais.io/labels).

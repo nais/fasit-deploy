@@ -1,0 +1,16 @@
+steps:
+  - uses: nais/fasit-deploy@v4
+    with:
+      version: 1.0.0
+      chart: some-chart
+      # Optional: how long to wait per `wait: true` target before failing.
+      # Default: 10. Hardcoded poll interval: 10s.
+      timeout-minutes: 10
+      # EITHER:
+      targets-file: ./targets.json
+      # OR:
+      targets: |
+        [
+          { "target": { "kind": "management", "tenant": "ci" }, "wait": true },
+          { "target": { "kind": "management", "tenant": "nav" }, "wait": false }
+        ]

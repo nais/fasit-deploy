@@ -1,0 +1,9 @@
+{
+  "name": "fasit-deploy",
+  "version": "4.0.0",
+  "private": true,
+  "description": "Deploy a feature to Fasit",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}

@@ -1,23 +1,28 @@
-name: 'Feature deploy'
-description: 'Deploy a new version of a fasit feature'
+name: "Fasit deploy"
+description: "Deploy a feature to Fasit"
 inputs:
   endpoint:
-    description: 'The fasit endpoint to deploy to'
+    description: "Fasit endpoint to deploy to"
     required: true
-    default: http://10.0.0.42
-
-  feature_name:  # id of input
-    description: 'feature name'
+    default: "http://10.0.0.42"
+  chart:
+    description: "OCI chart URI"
     required: true
-  json:  # id of input
-    description: 'json containing body for rollout request - ex {"imageTag": "2"}'
+  version:
+    description: "Chart version"
     required: true
+  targets:
+    description: "Inline JSON array of {target, wait} entries. Mutually exclusive with targets-file."
+    required: false
+    default: ""
+  targets-file:
+    description: "Path to a JSON file containing an array of {target, wait} entries. Mutually exclusive with targets."
+    required: false
+    default: ""
+  timeout-minutes:
+    description: "Maximum time in minutes to wait for each deployment with wait=true to reach a terminal state. Defaults to 10."
+    required: false
+    default: "10"
 runs:
-  using: "composite"
-  steps:
-    - run: ${{ github.action_path }}/deploy.sh
-      shell: bash
-      env:
-        ENDPOINT: ${{ inputs.endpoint }}
-        FEATURE_NAME: ${{ inputs.feature_name }}
-        JSON: ${{ inputs.json }}
+  using: "node24"
+  main: "src/index.js"
