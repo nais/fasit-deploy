@@ -143,6 +143,11 @@ async function fetchDeploymentStatus(endpoint, token, id) {
     headers: { Authorization: `Bearer ${token}` },
   });
   const body = await response.text();
+  if (response.status === 401) {
+    const err = new Error(`Status request failed (HTTP 401): ${body}`);
+    err.unauthorized = true;
+    throw err;
+  }
   if (!response.ok) {
     throw new Error(`Status request failed (HTTP ${response.status}): ${body}`);
   }
@@ -166,10 +171,21 @@ function fasitDeploymentUrl(id) {
   return `${FASIT_UI_BASE}/deployments/${encodeURIComponent(id)}`;
 }
 
-async function pollDeploymentStatus(endpoint, token, id, { timeoutMs, intervalMs = POLL_INTERVAL_MS, log = () => {} } = {}) {
+async function pollDeploymentStatus(endpoint, getToken, id, { timeoutMs, intervalMs = POLL_INTERVAL_MS, log = () => {} } = {}) {
   const deadline = Date.now() + timeoutMs;
+  let token = await getToken();
   while (true) {
-    const status = await fetchDeploymentStatus(endpoint, token, id);
+    let status;
+    try {
+      status = await fetchDeploymentStatus(endpoint, token, id);
+    } catch (err) {
+      if (err.unauthorized) {
+        log(`Token expired, refreshing`);
+        token = await getToken({ refresh: true });
+        continue;
+      }
+      throw err;
+    }
     log(`Deployment ${id} state: ${status.state}`);
     if (TERMINAL_FAILURE_STATES.has(status.state)) {
       throw new Error(`Deployment ${id} failed with state ${status.state} (details: ${fasitDeploymentUrl(id)})`);
@@ -221,8 +237,14 @@ async function main({ pollIntervalMs = POLL_INTERVAL_MS } = {}) {
 
     const repo = repository.split('/').pop();
 
-    console.log('Getting token from Github');
-    const token = await fetchOidcToken(oidcUrl, oidcToken);
+    let cachedToken = null;
+    const getToken = async ({ refresh = false } = {}) => {
+      if (refresh || !cachedToken) {
+        console.log(refresh ? 'Refreshing token from Github' : 'Getting token from Github');
+        cachedToken = await fetchOidcToken(oidcUrl, oidcToken);
+      }
+      return cachedToken;
+    };
 
     for (let i = 0; i < targets.length; i++) {
       const { target, wait } = targets[i];
@@ -230,13 +252,13 @@ async function main({ pollIntervalMs = POLL_INTERVAL_MS } = {}) {
       console.log(`Deploying to ${label} (wait=${wait})`);
       const payload = buildPayload({ chart, version, target, owner, repo, sha });
       console.log('JSON:', JSON.stringify(payload));
-      const id = await postDeployment(endpoint, token, payload);
+      const id = await postDeployment(endpoint, await getToken(), payload);
       lastDeploymentId = id;
       summaryLines.push(`- [Deployment ${id}](${fasitDeploymentUrl(id)}) created for ${label} (wait=${wait})\n`);
 
       if (wait) {
         console.log(`Waiting for deployment ${id} (timeout ${timeoutMinutes}m)`);
-        const finalStatus = await pollDeploymentStatus(endpoint, token, id, {
+        const finalStatus = await pollDeploymentStatus(endpoint, getToken, id, {
           timeoutMs,
           intervalMs: pollIntervalMs,
           log: (msg) => console.log(msg),

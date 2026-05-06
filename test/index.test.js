@@ -339,6 +339,19 @@ test('fetchDeploymentStatus', async (t) => {
       /state/
     );
   });
+
+  await t.test('throws with unauthorized flag on 401', async () => {
+    const server = await startServer((req, res) => {
+      res.writeHead(401);
+      res.end('oidc: token is expired');
+    });
+    t.after(() => new Promise((r) => server.close(r)));
+    const port = server.address().port;
+    await assert.rejects(
+      () => fetchDeploymentStatus(`http://127.0.0.1:${port}`, TOKEN, DEPLOYMENT_ID_A),
+      (err) => err.unauthorized === true && /401/.test(err.message)
+    );
+  });
 });
 
 test('pollDeploymentStatus', async (t) => {
@@ -349,7 +362,7 @@ test('pollDeploymentStatus', async (t) => {
     });
     t.after(() => new Promise((r) => server.close(r)));
     const port = server.address().port;
-    const result = await pollDeploymentStatus(`http://127.0.0.1:${port}`, TOKEN, DEPLOYMENT_ID_A, { timeoutMs: 5_000, intervalMs: 1 });
+    const result = await pollDeploymentStatus(`http://127.0.0.1:${port}`, async () => TOKEN, DEPLOYMENT_ID_A, { timeoutMs: 5_000, intervalMs: 1 });
     assert.equal(result.state, 'DEPLOYED');
   });
 
@@ -360,7 +373,7 @@ test('pollDeploymentStatus', async (t) => {
     });
     t.after(() => new Promise((r) => server.close(r)));
     const port = server.address().port;
-    const result = await pollDeploymentStatus(`http://127.0.0.1:${port}`, TOKEN, DEPLOYMENT_ID_A, { timeoutMs: 5_000, intervalMs: 1 });
+    const result = await pollDeploymentStatus(`http://127.0.0.1:${port}`, async () => TOKEN, DEPLOYMENT_ID_A, { timeoutMs: 5_000, intervalMs: 1 });
     assert.equal(result.state, 'DISABLED');
   });
 
@@ -372,7 +385,7 @@ test('pollDeploymentStatus', async (t) => {
     t.after(() => new Promise((r) => server.close(r)));
     const port = server.address().port;
     await assert.rejects(
-      () => pollDeploymentStatus(`http://127.0.0.1:${port}`, TOKEN, DEPLOYMENT_ID_A, { timeoutMs: 5_000, intervalMs: 1 }),
+      () => pollDeploymentStatus(`http://127.0.0.1:${port}`, async () => TOKEN, DEPLOYMENT_ID_A, { timeoutMs: 5_000, intervalMs: 1 }),
       /failed.*FAILED/
     );
   });
@@ -386,7 +399,7 @@ test('pollDeploymentStatus', async (t) => {
     });
     t.after(() => new Promise((r) => server.close(r)));
     const port = server.address().port;
-    const result = await pollDeploymentStatus(`http://127.0.0.1:${port}`, TOKEN, DEPLOYMENT_ID_A, { timeoutMs: 5_000, intervalMs: 1 });
+    const result = await pollDeploymentStatus(`http://127.0.0.1:${port}`, async () => TOKEN, DEPLOYMENT_ID_A, { timeoutMs: 5_000, intervalMs: 1 });
     assert.equal(result.state, 'DEPLOYED');
     assert.ok(i >= 3, `expected at least 3 polls, got ${i}`);
   });
@@ -399,9 +412,35 @@ test('pollDeploymentStatus', async (t) => {
     t.after(() => new Promise((r) => server.close(r)));
     const port = server.address().port;
     await assert.rejects(
-      () => pollDeploymentStatus(`http://127.0.0.1:${port}`, TOKEN, DEPLOYMENT_ID_A, { timeoutMs: 50, intervalMs: 30 }),
+      () => pollDeploymentStatus(`http://127.0.0.1:${port}`, async () => TOKEN, DEPLOYMENT_ID_A, { timeoutMs: 50, intervalMs: 30 }),
       /Timed out.*PENDING/
     );
+  });
+
+  await t.test('refreshes token on 401 and continues polling', async () => {
+    const tokens = ['stale-token', 'fresh-token'];
+    let tokenIdx = 0;
+    let getTokenCalls = 0;
+    const getToken = async ({ refresh = false } = {}) => {
+      getTokenCalls++;
+      if (refresh) tokenIdx++;
+      return tokens[Math.min(tokenIdx, tokens.length - 1)];
+    };
+    const server = await startServer((req, res) => {
+      const auth = req.headers['authorization'] || '';
+      if (auth === 'Bearer stale-token') {
+        res.writeHead(401);
+        res.end('oidc: token is expired');
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ state: 'DEPLOYED' }));
+    });
+    t.after(() => new Promise((r) => server.close(r)));
+    const port = server.address().port;
+    const result = await pollDeploymentStatus(`http://127.0.0.1:${port}`, getToken, DEPLOYMENT_ID_A, { timeoutMs: 5_000, intervalMs: 1 });
+    assert.equal(result.state, 'DEPLOYED');
+    assert.equal(getTokenCalls, 2, 'expected initial fetch + one refresh');
   });
 });
 
