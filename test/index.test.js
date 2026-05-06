@@ -10,7 +10,7 @@ const { spawn } = require('node:child_process');
 
 const {
   readInput, requireEnv, resolveTargets, validateEntry, resolveTimeoutMinutes,
-  fetchOidcToken, buildPayload, postDeployment, fetchDeploymentStatus, pollDeploymentStatus,
+  fetchOidcToken, parseJwtExpiry, buildPayload, postDeployment, fetchDeploymentStatus, pollDeploymentStatus,
   writeStepSummary, formatTarget, main,
 } = require('../src/index.js');
 
@@ -241,6 +241,35 @@ test('fetchOidcToken', async (t) => {
     t.after(() => new Promise((r) => server.close(r)));
     const port = server.address().port;
     await assert.rejects(() => fetchOidcToken(`http://127.0.0.1:${port}`, 'tok'));
+  });
+});
+
+test('parseJwtExpiry', async (t) => {
+  const makeJwt = (payload) => {
+    const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
+    const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    return `${header}.${body}.signature`;
+  };
+
+  await t.test('returns exp in milliseconds', () => {
+    const jwt = makeJwt({ exp: 1700000000, sub: 'test' });
+    assert.equal(parseJwtExpiry(jwt), 1700000000 * 1000);
+  });
+
+  await t.test('returns null when token is not a JWT', () => {
+    assert.equal(parseJwtExpiry('not-a-jwt'), null);
+    assert.equal(parseJwtExpiry('one.two'), null);
+    assert.equal(parseJwtExpiry(''), null);
+  });
+
+  await t.test('returns null when payload is not valid JSON', () => {
+    const jwt = `header.${Buffer.from('garbage').toString('base64url')}.sig`;
+    assert.equal(parseJwtExpiry(jwt), null);
+  });
+
+  await t.test('returns null when exp is missing or non-numeric', () => {
+    assert.equal(parseJwtExpiry(makeJwt({ sub: 'test' })), null);
+    assert.equal(parseJwtExpiry(makeJwt({ exp: 'soon' })), null);
   });
 });
 

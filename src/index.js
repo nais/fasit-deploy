@@ -4,6 +4,7 @@ const fs = require('node:fs');
 
 const POLL_INTERVAL_MS = 10_000;
 const DEFAULT_TIMEOUT_MINUTES = 10;
+const TOKEN_REFRESH_LEEWAY_MS = 60_000;
 const TERMINAL_SUCCESS_STATES = new Set(['DEPLOYED', 'DISABLED']);
 const TERMINAL_FAILURE_STATES = new Set(['FAILED']);
 const FASIT_UI_BASE = 'https://fasit.nais.io';
@@ -102,6 +103,18 @@ async function fetchOidcToken(requestUrl, requestToken) {
     throw new Error('OIDC token response did not contain a value');
   }
   return parsed.value;
+}
+
+function parseJwtExpiry(token) {
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+    if (typeof payload.exp !== 'number') return null;
+    return payload.exp * 1000;
+  } catch {
+    return null;
+  }
 }
 
 function buildPayload({ chart, version, target, owner, repo, sha }) {
@@ -238,10 +251,14 @@ async function main({ pollIntervalMs = POLL_INTERVAL_MS } = {}) {
     const repo = repository.split('/').pop();
 
     let cachedToken = null;
+    let cachedExpiry = null;
     const getToken = async ({ refresh = false } = {}) => {
-      if (refresh || !cachedToken) {
-        console.log(refresh ? 'Refreshing token from Github' : 'Getting token from Github');
+      const expiringSoon = cachedExpiry !== null && (cachedExpiry - Date.now() < TOKEN_REFRESH_LEEWAY_MS);
+      if (refresh || !cachedToken || expiringSoon) {
+        const reason = refresh ? 'forced refresh' : !cachedToken ? 'initial fetch' : 'expiring soon';
+        console.log(`Getting token from Github (${reason})`);
         cachedToken = await fetchOidcToken(oidcUrl, oidcToken);
+        cachedExpiry = parseJwtExpiry(cachedToken);
       }
       return cachedToken;
     };
@@ -286,7 +303,7 @@ if (require.main === module) main();
 
 module.exports = {
   readInput, requireEnv, resolveTargets, validateEntry, resolveTimeoutMinutes,
-  fetchOidcToken, buildPayload, postDeployment, fetchDeploymentStatus, pollDeploymentStatus,
+  fetchOidcToken, parseJwtExpiry, buildPayload, postDeployment, fetchDeploymentStatus, pollDeploymentStatus,
   writeStepSummary, formatTarget, fasitDeploymentUrl, main,
-  POLL_INTERVAL_MS, DEFAULT_TIMEOUT_MINUTES, FASIT_UI_BASE,
+  POLL_INTERVAL_MS, DEFAULT_TIMEOUT_MINUTES, TOKEN_REFRESH_LEEWAY_MS, FASIT_UI_BASE,
 };
