@@ -2,21 +2,16 @@
 
 const fs = require('node:fs');
 
-/**
- * Reads a GitHub Actions input by name from the INPUT_* environment variable.
- * Hyphens in the name are preserved (e.g. 'targets-file' → INPUT_TARGETS-FILE).
- * @param {string} name - The input name as declared in action.yml
- * @returns {string} The input value, or empty string if unset
- */
+const POLL_INTERVAL_MS = 10_000;
+const DEFAULT_TIMEOUT_MINUTES = 10;
+const TERMINAL_SUCCESS_STATES = new Set(['DEPLOYED', 'DISABLED']);
+const TERMINAL_FAILURE_STATES = new Set(['FAILED']);
+const FASIT_UI_BASE = 'https://fasit.nais.io';
+
 function readInput(name) {
   return process.env['INPUT_' + name.toUpperCase()] || '';
 }
 
-/**
- * Reads a required environment variable, throwing if it is unset or empty.
- * @param {string} name - The environment variable name
- * @returns {string} The variable value
- */
 function requireEnv(name) {
   const value = process.env[name];
   if (!value) {
@@ -25,18 +20,6 @@ function requireEnv(name) {
   return value;
 }
 
-/**
- * @typedef {Object} TargetEntry
- * @property {Object} target - Map of label keys to label values
- * @property {boolean} wait - Whether to wait for this deployment to finish
- */
-
-/**
- * Resolves the targets list from inline JSON or a file path; exactly one must be set.
- * @param {string} inline - Raw JSON string from the `targets` input
- * @param {string} filePath - Path from the `targets-file` input
- * @returns {TargetEntry[]} The validated, non-empty list of entries
- */
 function resolveTargets(inline, filePath) {
   const hasInline = inline.trim().length > 0;
   const hasFile = filePath.trim().length > 0;
@@ -76,13 +59,6 @@ function resolveTargets(inline, filePath) {
   return parsed;
 }
 
-/**
- * Validates a single targets entry has the shape {target: object, wait: boolean}.
- * @param {unknown} entry - The candidate entry
- * @param {number} index - Position in the list, for error messages
- * @param {string} source - Origin label, for error messages
- * @returns {void}
- */
 function validateEntry(entry, index, source) {
   const at = `${source}[${index}]`;
   if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
@@ -97,12 +73,16 @@ function validateEntry(entry, index, source) {
   }
 }
 
-/**
- * Fetches a GitHub OIDC token from the Actions token endpoint.
- * @param {string} requestUrl - The ACTIONS_ID_TOKEN_REQUEST_URL value
- * @param {string} requestToken - The ACTIONS_ID_TOKEN_REQUEST_TOKEN value
- * @returns {Promise<string>} The OIDC token value
- */
+function resolveTimeoutMinutes(raw) {
+  const trimmed = (raw || '').trim();
+  if (trimmed === '') return DEFAULT_TIMEOUT_MINUTES;
+  const n = Number(trimmed);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new Error(`Input "timeout-minutes" must be a positive number, got "${raw}"`);
+  }
+  return n;
+}
+
 async function fetchOidcToken(requestUrl, requestToken) {
   const response = await fetch(requestUrl, {
     headers: { Authorization: `bearer ${requestToken}` },
@@ -123,23 +103,8 @@ async function fetchOidcToken(requestUrl, requestToken) {
   return parsed.value;
 }
 
-/**
- * @typedef {Object} DeployPayload
- * @property {{ wait: boolean }} ci
- * @property {Object} target
- * @property {string} chart
- * @property {string} version
- * @property {{ owner: string, repo: string, ref: string }} ref
- */
-
-/**
- * Builds a single deployment request payload.
- * @param {{ chart: string, version: string, target: Object, wait: boolean, owner: string, repo: string, sha: string }} params
- * @returns {DeployPayload}
- */
-function buildPayload({ chart, version, target, wait, owner, repo, sha }) {
+function buildPayload({ chart, version, target, owner, repo, sha }) {
   return {
-    ci: { wait: wait },
     target: target,
     chart: chart,
     version: version,
@@ -147,13 +112,6 @@ function buildPayload({ chart, version, target, wait, owner, repo, sha }) {
   };
 }
 
-/**
- * Posts a deployment request to the Fasit endpoint.
- * @param {string} endpoint - The Fasit base URL
- * @param {string} token - The OIDC bearer token
- * @param {DeployPayload} payload - The deployment payload
- * @returns {Promise<string>} The response body
- */
 async function postDeployment(endpoint, token, payload) {
   const response = await fetch(`${endpoint}/github/deployment`, {
     method: 'POST',
@@ -167,37 +125,79 @@ async function postDeployment(endpoint, token, payload) {
   if (!response.ok) {
     throw new Error(`Deployment request failed (HTTP ${response.status}): ${body}`);
   }
-  return body || '';
+  let parsed;
+  try {
+    parsed = JSON.parse(body);
+  } catch (e) {
+    throw new Error(`Failed to parse deployment response: ${e.message}`);
+  }
+  if (!parsed.id || typeof parsed.id !== 'string') {
+    throw new Error('Deployment response did not contain an id');
+  }
+  return parsed.id;
 }
 
-/**
- * Appends a message to the GitHub step summary file, if configured.
- * @param {string} message - The markdown content to append
- * @returns {void}
- */
+async function fetchDeploymentStatus(endpoint, token, id) {
+  const response = await fetch(`${endpoint}/github/deployment/${encodeURIComponent(id)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const body = await response.text();
+  if (!response.ok) {
+    throw new Error(`Status request failed (HTTP ${response.status}): ${body}`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(body);
+  } catch (e) {
+    throw new Error(`Failed to parse status response: ${e.message}`);
+  }
+  if (!parsed.state || typeof parsed.state !== 'string') {
+    throw new Error('Status response did not contain a state');
+  }
+  return parsed;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function fasitDeploymentUrl(id) {
+  return `${FASIT_UI_BASE}/deployments/${encodeURIComponent(id)}`;
+}
+
+async function pollDeploymentStatus(endpoint, token, id, { timeoutMs, intervalMs = POLL_INTERVAL_MS, log = () => {} } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const status = await fetchDeploymentStatus(endpoint, token, id);
+    log(`Deployment ${id} state: ${status.state}`);
+    if (TERMINAL_FAILURE_STATES.has(status.state)) {
+      throw new Error(`Deployment ${id} failed with state ${status.state} (details: ${fasitDeploymentUrl(id)})`);
+    }
+    if (TERMINAL_SUCCESS_STATES.has(status.state)) {
+      return status;
+    }
+    if (Date.now() + intervalMs >= deadline) {
+      throw new Error(`Timed out waiting for deployment ${id} to finish (last state: ${status.state}, details: ${fasitDeploymentUrl(id)})`);
+    }
+    await sleep(intervalMs);
+  }
+}
+
 function writeStepSummary(message) {
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
   if (!summaryPath) return;
   fs.appendFileSync(summaryPath, message);
 }
 
-/**
- * Formats a target object as a stable, human-readable label string.
- * Used in step summaries; not sent to Fasit.
- * @param {Object} target - The target labels
- * @returns {string}
- */
 function formatTarget(target) {
   const keys = Object.keys(target).sort();
   if (keys.length === 0) return '{}';
   return '{' + keys.map((k) => `${k}: ${target[k]}`).join(', ') + '}';
 }
 
-/**
- * Main entry point: reads inputs, fetches OIDC token, and posts one deployment per target.
- * @returns {Promise<void>}
- */
-async function main() {
+async function main({ pollIntervalMs = POLL_INTERVAL_MS } = {}) {
+  const summaryLines = ['### Deployment created! :rocket:\n'];
+  let lastDeploymentId = null;
   try {
     const endpoint = readInput('endpoint');
     if (!endpoint) throw new Error('Input "endpoint" is required');
@@ -209,6 +209,8 @@ async function main() {
     if (!version) throw new Error('Input "version" is required and must not be empty');
 
     const targets = resolveTargets(readInput('targets'), readInput('targets-file'));
+    const timeoutMinutes = resolveTimeoutMinutes(readInput('timeout-minutes'));
+    const timeoutMs = timeoutMinutes * 60 * 1000;
 
     const repository = requireEnv('GITHUB_REPOSITORY');
     const owner = requireEnv('GITHUB_REPOSITORY_OWNER');
@@ -221,22 +223,38 @@ async function main() {
     console.log('Getting token from Github');
     const token = await fetchOidcToken(oidcUrl, oidcToken);
 
-    const summaryLines = ['### Deployment created! :rocket:\n'];
     for (let i = 0; i < targets.length; i++) {
       const { target, wait } = targets[i];
       const label = formatTarget(target);
       console.log(`Deploying to ${label} (wait=${wait})`);
-      const payload = buildPayload({ chart, version, target, wait, owner, repo, sha });
+      const payload = buildPayload({ chart, version, target, owner, repo, sha });
       console.log('JSON:', JSON.stringify(payload));
-      await postDeployment(endpoint, token, payload);
-      summaryLines.push(`- Deployment created for ${label} (wait=${wait})\n`);
+      const id = await postDeployment(endpoint, token, payload);
+      lastDeploymentId = id;
+      summaryLines.push(`- [Deployment ${id}](${fasitDeploymentUrl(id)}) created for ${label} (wait=${wait})\n`);
+
+      if (wait) {
+        console.log(`Waiting for deployment ${id} (timeout ${timeoutMinutes}m)`);
+        const finalStatus = await pollDeploymentStatus(endpoint, token, id, {
+          timeoutMs,
+          intervalMs: pollIntervalMs,
+          log: (msg) => console.log(msg),
+        });
+        summaryLines.push(`  - Reached state ${finalStatus.state}\n`);
+      }
     }
-    summaryLines.push('[Deployment progress](https://fasit.nais.io/deployments)\n');
+    summaryLines.push(`\n[All deployments](${FASIT_UI_BASE}/deployments)\n`);
     writeStepSummary(summaryLines.join(''));
 
-    console.log('Deployment progress: https://fasit.nais.io/deployments');
+    console.log(`Deployment progress: ${FASIT_UI_BASE}/deployments`);
   } catch (err) {
     console.error(err.message);
+    if (lastDeploymentId) {
+      summaryLines.push(`\n**Failed:** ${err.message}\n\n[Inspect deployment in Fasit](${fasitDeploymentUrl(lastDeploymentId)})\n`);
+    } else {
+      summaryLines.push(`\n**Failed:** ${err.message}\n`);
+    }
+    writeStepSummary(summaryLines.join(''));
     process.exitCode = 1;
   }
 }
@@ -244,6 +262,8 @@ async function main() {
 if (require.main === module) main();
 
 module.exports = {
-  readInput, requireEnv, resolveTargets, validateEntry,
-  fetchOidcToken, buildPayload, postDeployment, writeStepSummary, formatTarget, main,
+  readInput, requireEnv, resolveTargets, validateEntry, resolveTimeoutMinutes,
+  fetchOidcToken, buildPayload, postDeployment, fetchDeploymentStatus, pollDeploymentStatus,
+  writeStepSummary, formatTarget, fasitDeploymentUrl, main,
+  POLL_INTERVAL_MS, DEFAULT_TIMEOUT_MINUTES, FASIT_UI_BASE,
 };

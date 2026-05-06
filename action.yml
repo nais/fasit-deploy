@@ -19,6 +19,10 @@ inputs:
     description: "Path to a JSON file containing an array of {target, wait} entries. Mutually exclusive with targets."
     required: false
     default: ""
+  timeout-minutes:
+    description: "Maximum time in minutes to wait for each deployment with wait=true to reach a terminal state. Defaults to 10."
+    required: false
+    default: "10"
 runs:
   using: "node24"
   main: "src/index.js"

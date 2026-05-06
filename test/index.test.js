@@ -9,8 +9,9 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 
 const {
-  readInput, requireEnv, resolveTargets, validateEntry,
-  fetchOidcToken, buildPayload, postDeployment, writeStepSummary, formatTarget, main,
+  readInput, requireEnv, resolveTargets, validateEntry, resolveTimeoutMinutes,
+  fetchOidcToken, buildPayload, postDeployment, fetchDeploymentStatus, pollDeploymentStatus,
+  writeStepSummary, formatTarget, main,
 } = require('../src/index.js');
 
 const TOKEN = 'test-oidc-token-value-xyz';
@@ -22,9 +23,15 @@ const TARGETS_JSON = JSON.stringify([
   { target: TARGET_A, wait: true },
   { target: TARGET_B, wait: false },
 ]);
+const TARGETS_NO_WAIT_JSON = JSON.stringify([
+  { target: TARGET_A, wait: false },
+  { target: TARGET_B, wait: false },
+]);
 const OWNER = 'nais';
 const REPO_FULL = 'nais/fasit-deploy';
 const SHA = 'abc123def456';
+const DEPLOYMENT_ID_A = '11111111-1111-4111-8111-111111111111';
+const DEPLOYMENT_ID_B = '22222222-2222-4222-8222-222222222222';
 
 function startServer(handler) {
   return new Promise((resolve) => {
@@ -155,13 +162,36 @@ test('formatTarget', () => {
 });
 
 test('buildPayload', () => {
-  const result = buildPayload({ chart: CHART, version: VERSION, target: TARGET_A, wait: true, owner: OWNER, repo: 'fasit-deploy', sha: SHA });
+  const result = buildPayload({ chart: CHART, version: VERSION, target: TARGET_A, owner: OWNER, repo: 'fasit-deploy', sha: SHA });
   assert.deepEqual(result, {
-    ci: { wait: true },
     target: TARGET_A,
     chart: CHART,
     version: VERSION,
     ref: { owner: OWNER, repo: 'fasit-deploy', ref: SHA },
+  });
+});
+
+test('buildPayload omits ci field', () => {
+  const result = buildPayload({ chart: CHART, version: VERSION, target: TARGET_A, owner: OWNER, repo: 'fasit-deploy', sha: SHA });
+  assert.equal(result.ci, undefined);
+});
+
+test('resolveTimeoutMinutes', async (t) => {
+  await t.test('defaults to 10 when empty', () => {
+    assert.equal(resolveTimeoutMinutes(''), 10);
+    assert.equal(resolveTimeoutMinutes('   '), 10);
+  });
+  await t.test('parses positive numbers', () => {
+    assert.equal(resolveTimeoutMinutes('1'), 1);
+    assert.equal(resolveTimeoutMinutes('30'), 30);
+    assert.equal(resolveTimeoutMinutes('0.5'), 0.5);
+  });
+  await t.test('rejects non-numeric', () => {
+    assert.throws(() => resolveTimeoutMinutes('abc'), /positive number/);
+  });
+  await t.test('rejects zero and negative', () => {
+    assert.throws(() => resolveTimeoutMinutes('0'), /positive number/);
+    assert.throws(() => resolveTimeoutMinutes('-5'), /positive number/);
   });
 });
 
@@ -209,7 +239,7 @@ test('fetchOidcToken', async (t) => {
 });
 
 test('postDeployment', async (t) => {
-  await t.test('sends correct headers and body', async () => {
+  await t.test('sends correct headers and body, returns id from response', async () => {
     let capturedHeaders, capturedBody;
     const server = await startServer((req, res) => {
       capturedHeaders = req.headers;
@@ -217,14 +247,15 @@ test('postDeployment', async (t) => {
       req.on('data', (d) => { body += d; });
       req.on('end', () => {
         capturedBody = body;
-        res.writeHead(200);
-        res.end('ok');
+        res.writeHead(201, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ id: DEPLOYMENT_ID_A }));
       });
     });
     t.after(() => new Promise((r) => server.close(r)));
     const port = server.address().port;
-    const payload = buildPayload({ chart: CHART, version: VERSION, target: TARGET_A, wait: true, owner: OWNER, repo: 'fasit-deploy', sha: SHA });
-    await postDeployment(`http://127.0.0.1:${port}`, TOKEN, payload);
+    const payload = buildPayload({ chart: CHART, version: VERSION, target: TARGET_A, owner: OWNER, repo: 'fasit-deploy', sha: SHA });
+    const id = await postDeployment(`http://127.0.0.1:${port}`, TOKEN, payload);
+    assert.equal(id, DEPLOYMENT_ID_A);
     assert.equal(capturedHeaders['authorization'], `Bearer ${TOKEN}`);
     assert.ok(capturedHeaders['content-type'].includes('application/json'));
     assert.deepEqual(JSON.parse(capturedBody), payload);
@@ -247,6 +278,125 @@ test('postDeployment', async (t) => {
       }
     );
   });
+
+  await t.test('throws when response has no id', async () => {
+    const server = await startServer((req, res) => {
+      res.writeHead(201, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ foo: 'bar' }));
+    });
+    t.after(() => new Promise((r) => server.close(r)));
+    const port = server.address().port;
+    await assert.rejects(
+      () => postDeployment(`http://127.0.0.1:${port}`, TOKEN, {}),
+      /id/
+    );
+  });
+});
+
+test('fetchDeploymentStatus', async (t) => {
+  await t.test('returns parsed status for given id', async () => {
+    let capturedPath;
+    const server = await startServer((req, res) => {
+      capturedPath = req.url;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ state: 'PENDING' }));
+    });
+    t.after(() => new Promise((r) => server.close(r)));
+    const port = server.address().port;
+    const status = await fetchDeploymentStatus(`http://127.0.0.1:${port}`, TOKEN, DEPLOYMENT_ID_A);
+    assert.equal(status.state, 'PENDING');
+    assert.equal(capturedPath, `/github/deployment/${DEPLOYMENT_ID_A}`);
+  });
+
+  await t.test('throws on 404', async () => {
+    const server = await startServer((req, res) => {
+      res.writeHead(404);
+      res.end('not found');
+    });
+    t.after(() => new Promise((r) => server.close(r)));
+    const port = server.address().port;
+    await assert.rejects(
+      () => fetchDeploymentStatus(`http://127.0.0.1:${port}`, TOKEN, DEPLOYMENT_ID_A),
+      /404/
+    );
+  });
+
+  await t.test('throws when response has no state', async () => {
+    const server = await startServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({}));
+    });
+    t.after(() => new Promise((r) => server.close(r)));
+    const port = server.address().port;
+    await assert.rejects(
+      () => fetchDeploymentStatus(`http://127.0.0.1:${port}`, TOKEN, DEPLOYMENT_ID_A),
+      /state/
+    );
+  });
+});
+
+test('pollDeploymentStatus', async (t) => {
+  await t.test('resolves on DEPLOYED', async () => {
+    const server = await startServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ state: 'DEPLOYED' }));
+    });
+    t.after(() => new Promise((r) => server.close(r)));
+    const port = server.address().port;
+    const result = await pollDeploymentStatus(`http://127.0.0.1:${port}`, TOKEN, DEPLOYMENT_ID_A, { timeoutMs: 5_000, intervalMs: 1 });
+    assert.equal(result.state, 'DEPLOYED');
+  });
+
+  await t.test('resolves on DISABLED', async () => {
+    const server = await startServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ state: 'DISABLED' }));
+    });
+    t.after(() => new Promise((r) => server.close(r)));
+    const port = server.address().port;
+    const result = await pollDeploymentStatus(`http://127.0.0.1:${port}`, TOKEN, DEPLOYMENT_ID_A, { timeoutMs: 5_000, intervalMs: 1 });
+    assert.equal(result.state, 'DISABLED');
+  });
+
+  await t.test('rejects on FAILED', async () => {
+    const server = await startServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ state: 'FAILED' }));
+    });
+    t.after(() => new Promise((r) => server.close(r)));
+    const port = server.address().port;
+    await assert.rejects(
+      () => pollDeploymentStatus(`http://127.0.0.1:${port}`, TOKEN, DEPLOYMENT_ID_A, { timeoutMs: 5_000, intervalMs: 1 }),
+      /failed.*FAILED/
+    );
+  });
+
+  await t.test('keeps polling through PENDING then DEPLOYED', async () => {
+    const sequence = ['PENDING', 'PENDING', 'DEPLOYED'];
+    let i = 0;
+    const server = await startServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ state: sequence[Math.min(i++, sequence.length - 1)] }));
+    });
+    t.after(() => new Promise((r) => server.close(r)));
+    const port = server.address().port;
+    const result = await pollDeploymentStatus(`http://127.0.0.1:${port}`, TOKEN, DEPLOYMENT_ID_A, { timeoutMs: 5_000, intervalMs: 1 });
+    assert.equal(result.state, 'DEPLOYED');
+    assert.ok(i >= 3, `expected at least 3 polls, got ${i}`);
+  });
+
+  await t.test('times out when never reaching terminal state', async () => {
+    const server = await startServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ state: 'PENDING' }));
+    });
+    t.after(() => new Promise((r) => server.close(r)));
+    const port = server.address().port;
+    await assert.rejects(
+      () => pollDeploymentStatus(`http://127.0.0.1:${port}`, TOKEN, DEPLOYMENT_ID_A, { timeoutMs: 50, intervalMs: 30 }),
+      /Timed out.*PENDING/
+    );
+  });
 });
 
 test('writeStepSummary', async (t) => {
@@ -264,7 +414,36 @@ test('writeStepSummary', async (t) => {
   });
 });
 
-test('main() happy path posts once per target', async (t) => {
+function mockFasitHandler({ postState = 'DEPLOYED', postStatesById, capturedPosts, capturedPaths } = {}) {
+  let postCounter = 0;
+  return (req, res) => {
+    if (capturedPaths) capturedPaths.push(`${req.method} ${req.url}`);
+    if (req.method === 'POST') {
+      let body = '';
+      req.on('data', (d) => { body += d; });
+      req.on('end', () => {
+        const id = postCounter === 0 ? DEPLOYMENT_ID_A : DEPLOYMENT_ID_B;
+        postCounter++;
+        if (capturedPosts) capturedPosts.push({ id, payload: JSON.parse(body) });
+        res.writeHead(201, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ id }));
+      });
+      return;
+    }
+    if (req.method === 'GET') {
+      const idMatch = req.url.match(/\/github\/deployment\/([^/?]+)/);
+      const id = idMatch ? idMatch[1] : '';
+      const state = (postStatesById && postStatesById[id]) || postState;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ id, state }));
+      return;
+    }
+    res.writeHead(405);
+    res.end();
+  };
+}
+
+test('main() happy path posts once per target (no wait)', async (t) => {
   let oidcServer, fasitServer;
   const capturedPosts = [];
   const tmpSummary = path.join(os.tmpdir(), `summary-${Date.now()}.txt`);
@@ -286,22 +465,14 @@ test('main() happy path posts once per target', async (t) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ value: TOKEN }));
   });
-  fasitServer = await startServer((req, res) => {
-    let body = '';
-    req.on('data', (d) => { body += d; });
-    req.on('end', () => {
-      capturedPosts.push(JSON.parse(body));
-      res.writeHead(200);
-      res.end('ok');
-    });
-  });
+  fasitServer = await startServer(mockFasitHandler({ capturedPosts }));
 
   for (const k of envKeys) savedEnv[k] = process.env[k];
 
   process.env['INPUT_ENDPOINT'] = `http://127.0.0.1:${fasitServer.address().port}`;
   process.env['INPUT_CHART'] = CHART;
   process.env['INPUT_VERSION'] = VERSION;
-  process.env['INPUT_TARGETS'] = TARGETS_JSON;
+  process.env['INPUT_TARGETS'] = TARGETS_NO_WAIT_JSON;
   delete process.env['INPUT_TARGETS-FILE'];
   process.env['GITHUB_REPOSITORY'] = REPO_FULL;
   process.env['GITHUB_REPOSITORY_OWNER'] = OWNER;
@@ -316,7 +487,7 @@ test('main() happy path posts once per target', async (t) => {
   console.log = (...args) => logged.push(args.join(' '));
   console.error = (...args) => logged.push(args.join(' '));
 
-  await main();
+  await main({ pollIntervalMs: 1 });
 
   console.log = origLog;
   console.error = origErr;
@@ -324,8 +495,11 @@ test('main() happy path posts once per target', async (t) => {
   assert.ok(!process.exitCode, `exitCode should be 0/undefined, got ${process.exitCode}`);
 
   assert.equal(capturedPosts.length, 2, 'should POST once per target');
-  assert.deepEqual(capturedPosts[0], buildPayload({ chart: CHART, version: VERSION, target: TARGET_A, wait: true, owner: OWNER, repo: 'fasit-deploy', sha: SHA }));
-  assert.deepEqual(capturedPosts[1], buildPayload({ chart: CHART, version: VERSION, target: TARGET_B, wait: false, owner: OWNER, repo: 'fasit-deploy', sha: SHA }));
+  const expectedPayloadA = buildPayload({ chart: CHART, version: VERSION, target: TARGET_A, owner: OWNER, repo: 'fasit-deploy', sha: SHA });
+  const expectedPayloadB = buildPayload({ chart: CHART, version: VERSION, target: TARGET_B, owner: OWNER, repo: 'fasit-deploy', sha: SHA });
+  assert.deepEqual(capturedPosts[0].payload, expectedPayloadA);
+  assert.deepEqual(capturedPosts[1].payload, expectedPayloadB);
+  assert.equal(capturedPosts[0].payload.ci, undefined, 'payload must not contain ci');
 
   for (const entry of logged) {
     assert.ok(!entry.includes(TOKEN), `Token leaked in log: ${entry}`);
@@ -337,13 +511,117 @@ test('main() happy path posts once per target', async (t) => {
   assert.ok(summary.includes('tenant: ci'));
   assert.ok(summary.includes('tenant: nav'));
   assert.ok(summary.includes('fasit.nais.io/deployments'));
+  assert.ok(summary.includes(`https://fasit.nais.io/deployments/${DEPLOYMENT_ID_A}`), 'summary should link to fasit deployment page per deployment');
+});
+
+test('main() polls when wait=true and resolves on DEPLOYED', async (t) => {
+  let oidcServer, fasitServer;
+  const capturedPosts = [];
+  const capturedPaths = [];
+  const savedEnv = {};
+  const envKeys = ['INPUT_ENDPOINT', 'INPUT_CHART', 'INPUT_VERSION', 'INPUT_TARGETS', 'INPUT_TARGETS-FILE', 'GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_OWNER', 'GITHUB_SHA', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_URL'];
+
+  t.after(async () => {
+    for (const k of envKeys) {
+      if (savedEnv[k] === undefined) delete process.env[k];
+      else process.env[k] = savedEnv[k];
+    }
+    process.exitCode = undefined;
+    await new Promise((r) => oidcServer.close(r));
+    await new Promise((r) => fasitServer.close(r));
+  });
+
+  oidcServer = await startServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ value: TOKEN }));
+  });
+  fasitServer = await startServer(mockFasitHandler({ capturedPosts, capturedPaths, postState: 'DEPLOYED' }));
+
+  for (const k of envKeys) savedEnv[k] = process.env[k];
+
+  process.env['INPUT_ENDPOINT'] = `http://127.0.0.1:${fasitServer.address().port}`;
+  process.env['INPUT_CHART'] = CHART;
+  process.env['INPUT_VERSION'] = VERSION;
+  process.env['INPUT_TARGETS'] = TARGETS_JSON;
+  delete process.env['INPUT_TARGETS-FILE'];
+  process.env['GITHUB_REPOSITORY'] = REPO_FULL;
+  process.env['GITHUB_REPOSITORY_OWNER'] = OWNER;
+  process.env['GITHUB_SHA'] = SHA;
+  process.env['ACTIONS_ID_TOKEN_REQUEST_TOKEN'] = 'test-request-token';
+  process.env['ACTIONS_ID_TOKEN_REQUEST_URL'] = `http://127.0.0.1:${oidcServer.address().port}`;
+
+  const origLog = console.log;
+  console.log = () => {};
+  await main({ pollIntervalMs: 1 });
+  console.log = origLog;
+
+  assert.ok(!process.exitCode, `exitCode should be 0, got ${process.exitCode}`);
+  assert.equal(capturedPosts.length, 2);
+  const getCalls = capturedPaths.filter((p) => p.startsWith('GET '));
+  assert.ok(getCalls.length >= 1, 'should have polled at least once for the wait=true target');
+  assert.ok(getCalls.some((p) => p.includes(DEPLOYMENT_ID_A)), 'should have polled the wait=true deployment id');
+  assert.ok(!getCalls.some((p) => p.includes(DEPLOYMENT_ID_B)), 'should NOT poll the wait=false target');
+});
+
+test('main() exits non-zero when polling sees FAILED', async (t) => {
+  let oidcServer, fasitServer;
+  const capturedPosts = [];
+  const tmpSummary = path.join(os.tmpdir(), `summary-fail-${Date.now()}.txt`);
+  const savedEnv = {};
+  const envKeys = ['INPUT_ENDPOINT', 'INPUT_CHART', 'INPUT_VERSION', 'INPUT_TARGETS', 'INPUT_TARGETS-FILE', 'GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_OWNER', 'GITHUB_SHA', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_URL', 'GITHUB_STEP_SUMMARY'];
+
+  t.after(async () => {
+    for (const k of envKeys) {
+      if (savedEnv[k] === undefined) delete process.env[k];
+      else process.env[k] = savedEnv[k];
+    }
+    process.exitCode = undefined;
+    if (fs.existsSync(tmpSummary)) fs.unlinkSync(tmpSummary);
+    await new Promise((r) => oidcServer.close(r));
+    await new Promise((r) => fasitServer.close(r));
+  });
+
+  oidcServer = await startServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ value: TOKEN }));
+  });
+  fasitServer = await startServer(mockFasitHandler({ capturedPosts, postState: 'FAILED' }));
+
+  for (const k of envKeys) savedEnv[k] = process.env[k];
+
+  process.env['INPUT_ENDPOINT'] = `http://127.0.0.1:${fasitServer.address().port}`;
+  process.env['INPUT_CHART'] = CHART;
+  process.env['INPUT_VERSION'] = VERSION;
+  process.env['INPUT_TARGETS'] = JSON.stringify([{ target: TARGET_A, wait: true }, { target: TARGET_B, wait: true }]);
+  delete process.env['INPUT_TARGETS-FILE'];
+  process.env['GITHUB_REPOSITORY'] = REPO_FULL;
+  process.env['GITHUB_REPOSITORY_OWNER'] = OWNER;
+  process.env['GITHUB_SHA'] = SHA;
+  process.env['ACTIONS_ID_TOKEN_REQUEST_TOKEN'] = 'test-request-token';
+  process.env['ACTIONS_ID_TOKEN_REQUEST_URL'] = `http://127.0.0.1:${oidcServer.address().port}`;
+  process.env['GITHUB_STEP_SUMMARY'] = tmpSummary;
+
+  const origLog = console.log;
+  const origErr = console.error;
+  console.log = () => {};
+  console.error = () => {};
+  await main({ pollIntervalMs: 1 });
+  console.log = origLog;
+  console.error = origErr;
+
+  assert.equal(process.exitCode, 1);
+  assert.equal(capturedPosts.length, 1, 'should abort after first failed poll, not POST second target');
+
+  const summary = fs.readFileSync(tmpSummary, 'utf8');
+  assert.ok(summary.includes('**Failed:**'), 'summary should mark failure');
+  assert.ok(summary.includes(`https://fasit.nais.io/deployments/${DEPLOYMENT_ID_A}`), 'summary should link to fasit deployment page on failure');
 });
 
 test('main() reads targets-file', async (t) => {
   let oidcServer, fasitServer;
   const capturedPosts = [];
   const tmpFile = path.join(os.tmpdir(), `targets-${Date.now()}.json`);
-  fs.writeFileSync(tmpFile, JSON.stringify([{ target: TARGET_A, wait: true }]));
+  fs.writeFileSync(tmpFile, JSON.stringify([{ target: TARGET_A, wait: false }]));
 
   const savedEnv = {};
   const envKeys = ['INPUT_ENDPOINT', 'INPUT_CHART', 'INPUT_VERSION', 'INPUT_TARGETS', 'INPUT_TARGETS-FILE', 'GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_OWNER', 'GITHUB_SHA', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_URL', 'GITHUB_STEP_SUMMARY'];
@@ -363,15 +641,7 @@ test('main() reads targets-file', async (t) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ value: TOKEN }));
   });
-  fasitServer = await startServer((req, res) => {
-    let body = '';
-    req.on('data', (d) => { body += d; });
-    req.on('end', () => {
-      capturedPosts.push(JSON.parse(body));
-      res.writeHead(200);
-      res.end('ok');
-    });
-  });
+  fasitServer = await startServer(mockFasitHandler({ capturedPosts }));
 
   for (const k of envKeys) savedEnv[k] = process.env[k];
 
@@ -386,11 +656,11 @@ test('main() reads targets-file', async (t) => {
   process.env['ACTIONS_ID_TOKEN_REQUEST_TOKEN'] = 'test-request-token';
   process.env['ACTIONS_ID_TOKEN_REQUEST_URL'] = `http://127.0.0.1:${oidcServer.address().port}`;
 
-  await main();
+  await main({ pollIntervalMs: 1 });
 
   assert.ok(!process.exitCode);
   assert.equal(capturedPosts.length, 1);
-  assert.deepEqual(capturedPosts[0].target, TARGET_A);
+  assert.deepEqual(capturedPosts[0].payload.target, TARGET_A);
 });
 
 test('main() aborts on first POST failure', async (t) => {
@@ -424,7 +694,7 @@ test('main() aborts on first POST failure', async (t) => {
   process.env['INPUT_ENDPOINT'] = `http://127.0.0.1:${fasitServer.address().port}`;
   process.env['INPUT_CHART'] = CHART;
   process.env['INPUT_VERSION'] = VERSION;
-  process.env['INPUT_TARGETS'] = TARGETS_JSON;
+  process.env['INPUT_TARGETS'] = TARGETS_NO_WAIT_JSON;
   delete process.env['INPUT_TARGETS-FILE'];
   process.env['GITHUB_REPOSITORY'] = REPO_FULL;
   process.env['GITHUB_REPOSITORY_OWNER'] = OWNER;
@@ -434,7 +704,7 @@ test('main() aborts on first POST failure', async (t) => {
 
   const origErr = console.error;
   console.error = () => {};
-  await main();
+  await main({ pollIntervalMs: 1 });
   console.error = origErr;
 
   assert.equal(process.exitCode, 1);
@@ -454,21 +724,13 @@ test('smoke: subprocess happy path', async (t) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ value: TOKEN }));
   });
-  fasitServer = await startServer((req, res) => {
-    let body = '';
-    req.on('data', (d) => { body += d; });
-    req.on('end', () => {
-      capturedPosts.push(JSON.parse(body));
-      res.writeHead(200);
-      res.end('ok');
-    });
-  });
+  fasitServer = await startServer(mockFasitHandler({ capturedPosts }));
 
   const { code, stdout, stderr } = await spawnScript({
     INPUT_ENDPOINT: `http://127.0.0.1:${fasitServer.address().port}`,
     INPUT_CHART: CHART,
     INPUT_VERSION: VERSION,
-    INPUT_TARGETS: TARGETS_JSON,
+    INPUT_TARGETS: TARGETS_NO_WAIT_JSON,
     GITHUB_REPOSITORY: REPO_FULL,
     GITHUB_REPOSITORY_OWNER: OWNER,
     GITHUB_SHA: SHA,
@@ -486,8 +748,8 @@ test('smoke: subprocess happy path', async (t) => {
   assert.ok(!stderr.includes(TOKEN), 'Token leaked in stderr');
 
   assert.equal(capturedPosts.length, 2);
-  assert.deepEqual(capturedPosts[0].target, TARGET_A);
-  assert.deepEqual(capturedPosts[1].target, TARGET_B);
+  assert.deepEqual(capturedPosts[0].payload.target, TARGET_A);
+  assert.deepEqual(capturedPosts[1].payload.target, TARGET_B);
 });
 
 test('smoke: subprocess failure paths', async (t) => {
@@ -504,16 +766,13 @@ test('smoke: subprocess failure paths', async (t) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ value: TOKEN }));
   });
-  fasitServer = await startServer((req, res) => {
-    res.writeHead(200);
-    res.end('ok');
-  });
+  fasitServer = await startServer(mockFasitHandler({}));
 
   const baseEnv = {
     INPUT_ENDPOINT: `http://127.0.0.1:${fasitServer.address().port}`,
     INPUT_CHART: CHART,
     INPUT_VERSION: VERSION,
-    INPUT_TARGETS: TARGETS_JSON,
+    INPUT_TARGETS: TARGETS_NO_WAIT_JSON,
     GITHUB_REPOSITORY: REPO_FULL,
     GITHUB_REPOSITORY_OWNER: OWNER,
     GITHUB_SHA: SHA,
