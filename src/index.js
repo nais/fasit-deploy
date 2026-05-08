@@ -8,6 +8,63 @@ const TOKEN_REFRESH_LEEWAY_MS = 60_000;
 const TERMINAL_SUCCESS_STATES = new Set(['DEPLOYED', 'DISABLED']);
 const TERMINAL_FAILURE_STATES = new Set(['FAILED']);
 const FASIT_UI_BASE = 'https://fasit.nais.io';
+const DEFAULT_FETCH_ATTEMPTS = 5;
+const DEFAULT_FETCH_BASE_DELAY_MS = 1000;
+
+/**
+ * Builds a human-readable description of a fetch error, including the
+ * underlying `cause` (DNS, ECONNRESET, ETIMEDOUT, etc.). Node's global
+ * `fetch` rejects with a generic `TypeError: fetch failed` and stashes the
+ * real reason on `err.cause`, so we always need to drill in.
+ */
+function describeFetchError(err) {
+  if (!err) return 'unknown error';
+  const parts = [err.message || String(err)];
+  let cause = err.cause;
+  let depth = 0;
+  while (cause && depth < 3) {
+    const code = cause.code ? ` [${cause.code}]` : '';
+    const msg = cause.message || String(cause);
+    parts.push(`cause:${code} ${msg}`);
+    cause = cause.cause;
+    depth++;
+  }
+  return parts.join(' | ');
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Wraps a fetch call with bounded retries on *network* errors (i.e. when
+ * `fetch` itself rejects). HTTP status handling is left to the caller, so
+ * 4xx/5xx responses are returned as-is and not retried here.
+ *
+ * @param {string} label - Short description used in retry log lines.
+ * @param {() => Promise<Response>} doFetch - Function that performs one fetch.
+ * @param {{ attempts?: number, baseDelayMs?: number, log?: (msg: string) => void }} [opts]
+ * @returns {Promise<Response>}
+ */
+async function fetchWithRetry(label, doFetch, { attempts = DEFAULT_FETCH_ATTEMPTS, baseDelayMs = DEFAULT_FETCH_BASE_DELAY_MS, log = console.log } = {}) {
+  let lastErr;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await doFetch();
+    } catch (err) {
+      lastErr = err;
+      const reason = describeFetchError(err);
+      if (attempt >= attempts) {
+        throw new Error(`${label} failed after ${attempts} attempt(s): ${reason}`);
+      }
+      const delay = baseDelayMs * 2 ** (attempt - 1);
+      log(`${label}: fetch error on attempt ${attempt}/${attempts} (${reason}); retrying in ${delay}ms`);
+      await sleep(delay);
+    }
+  }
+  // Unreachable, but keep the type checker happy.
+  throw lastErr;
+}
 
 function readInput(name) {
   return process.env['INPUT_' + name.toUpperCase()] || '';
@@ -85,10 +142,14 @@ function resolveTimeoutMinutes(raw) {
   return n;
 }
 
-async function fetchOidcToken(requestUrl, requestToken) {
-  const response = await fetch(requestUrl, {
-    headers: { Authorization: `bearer ${requestToken}` },
-  });
+async function fetchOidcToken(requestUrl, requestToken, { fetchOptions } = {}) {
+  const response = await fetchWithRetry(
+    'OIDC token request',
+    () => fetch(requestUrl, {
+      headers: { Authorization: `bearer ${requestToken}` },
+    }),
+    fetchOptions,
+  );
   const body = await response.text();
   if (!response.ok) {
     throw new Error(`Failed to get OIDC token (HTTP ${response.status}): ${body}`);
@@ -126,15 +187,19 @@ function buildPayload({ chart, version, target, owner, repo, sha }) {
   };
 }
 
-async function postDeployment(endpoint, token, payload) {
-  const response = await fetch(`${endpoint}/github/deployment`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
-  });
+async function postDeployment(endpoint, token, payload, { fetchOptions } = {}) {
+  const response = await fetchWithRetry(
+    'Deployment request',
+    () => fetch(`${endpoint}/github/deployment`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    }),
+    fetchOptions,
+  );
   const body = await response.text();
   if (!response.ok) {
     throw new Error(`Deployment request failed (HTTP ${response.status}): ${body}`);
@@ -151,10 +216,14 @@ async function postDeployment(endpoint, token, payload) {
   return parsed.id;
 }
 
-async function fetchDeploymentStatus(endpoint, token, id) {
-  const response = await fetch(`${endpoint}/github/deployment/${encodeURIComponent(id)}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+async function fetchDeploymentStatus(endpoint, token, id, { fetchOptions } = {}) {
+  const response = await fetchWithRetry(
+    `Status request for ${id}`,
+    () => fetch(`${endpoint}/github/deployment/${encodeURIComponent(id)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    }),
+    fetchOptions,
+  );
   const body = await response.text();
   if (response.status === 401) {
     const err = new Error(`Status request failed (HTTP 401): ${body}`);
@@ -174,10 +243,6 @@ async function fetchDeploymentStatus(endpoint, token, id) {
     throw new Error('Status response did not contain a state');
   }
   return parsed;
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function fasitDeploymentUrl(id) {
@@ -305,5 +370,7 @@ module.exports = {
   readInput, requireEnv, resolveTargets, validateEntry, resolveTimeoutMinutes,
   fetchOidcToken, parseJwtExpiry, buildPayload, postDeployment, fetchDeploymentStatus, pollDeploymentStatus,
   writeStepSummary, formatTarget, fasitDeploymentUrl, main,
+  describeFetchError, fetchWithRetry,
   POLL_INTERVAL_MS, DEFAULT_TIMEOUT_MINUTES, TOKEN_REFRESH_LEEWAY_MS, FASIT_UI_BASE,
+  DEFAULT_FETCH_ATTEMPTS, DEFAULT_FETCH_BASE_DELAY_MS,
 };

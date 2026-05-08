@@ -12,6 +12,7 @@ const {
   readInput, requireEnv, resolveTargets, validateEntry, resolveTimeoutMinutes,
   fetchOidcToken, parseJwtExpiry, buildPayload, postDeployment, fetchDeploymentStatus, pollDeploymentStatus,
   writeStepSummary, formatTarget, main,
+  describeFetchError, fetchWithRetry,
 } = require('../src/index.js');
 
 const TOKEN = 'test-oidc-token-value-xyz';
@@ -470,6 +471,131 @@ test('pollDeploymentStatus', async (t) => {
     const result = await pollDeploymentStatus(`http://127.0.0.1:${port}`, getToken, DEPLOYMENT_ID_A, { timeoutMs: 5_000, intervalMs: 1 });
     assert.equal(result.state, 'DEPLOYED');
     assert.equal(getTokenCalls, 2, 'expected initial fetch + one refresh');
+  });
+});
+
+test('describeFetchError', async (t) => {
+  await t.test('returns message when no cause is present', () => {
+    assert.equal(describeFetchError(new Error('boom')), 'boom');
+  });
+
+  await t.test('includes cause message and code', () => {
+    const cause = Object.assign(new Error('getaddrinfo ENOTFOUND fasit'), { code: 'ENOTFOUND' });
+    const err = new TypeError('fetch failed');
+    err.cause = cause;
+    const desc = describeFetchError(err);
+    assert.match(desc, /fetch failed/);
+    assert.match(desc, /ENOTFOUND/);
+    assert.match(desc, /getaddrinfo/);
+  });
+
+  await t.test('walks nested causes up to a limit', () => {
+    const inner = Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+    const middle = new Error('mid'); middle.cause = inner;
+    const outer = new TypeError('fetch failed'); outer.cause = middle;
+    const desc = describeFetchError(outer);
+    assert.match(desc, /ECONNRESET/);
+    assert.match(desc, /socket hang up/);
+  });
+
+  await t.test('handles null/undefined safely', () => {
+    assert.equal(describeFetchError(null), 'unknown error');
+    assert.equal(describeFetchError(undefined), 'unknown error');
+  });
+});
+
+test('fetchWithRetry', async (t) => {
+  await t.test('returns response on first success without retrying', async () => {
+    let calls = 0;
+    const res = await fetchWithRetry('test', async () => {
+      calls++;
+      return { ok: true, status: 200 };
+    }, { attempts: 3, baseDelayMs: 1 });
+    assert.equal(calls, 1);
+    assert.equal(res.status, 200);
+  });
+
+  await t.test('retries on thrown error and eventually succeeds', async () => {
+    let calls = 0;
+    const logs = [];
+    const res = await fetchWithRetry('test', async () => {
+      calls++;
+      if (calls < 3) {
+        const err = new TypeError('fetch failed');
+        err.cause = Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+        throw err;
+      }
+      return { ok: true, status: 200 };
+    }, { attempts: 5, baseDelayMs: 1, log: (m) => logs.push(m) });
+    assert.equal(calls, 3);
+    assert.equal(res.status, 200);
+    assert.equal(logs.length, 2);
+    assert.match(logs[0], /attempt 1\/5/);
+    assert.match(logs[0], /ECONNRESET/);
+    assert.match(logs[0], /socket hang up/);
+  });
+
+  await t.test('throws wrapped error after exhausting attempts and includes cause', async () => {
+    let calls = 0;
+    await assert.rejects(
+      () => fetchWithRetry('Status request', async () => {
+        calls++;
+        const err = new TypeError('fetch failed');
+        err.cause = Object.assign(new Error('connect ETIMEDOUT'), { code: 'ETIMEDOUT' });
+        throw err;
+      }, { attempts: 3, baseDelayMs: 1, log: () => {} }),
+      (err) => {
+        assert.match(err.message, /Status request failed after 3 attempt/);
+        assert.match(err.message, /ETIMEDOUT/);
+        assert.match(err.message, /connect ETIMEDOUT/);
+        return true;
+      },
+    );
+    assert.equal(calls, 3);
+  });
+
+  await t.test('does not retry on HTTP error responses (caller decides)', async () => {
+    let calls = 0;
+    const res = await fetchWithRetry('test', async () => {
+      calls++;
+      return { ok: false, status: 500 };
+    }, { attempts: 5, baseDelayMs: 1 });
+    assert.equal(calls, 1);
+    assert.equal(res.status, 500);
+  });
+});
+
+test('fetchDeploymentStatus retries transient fetch errors', async (t) => {
+  await t.test('recovers when fetch throws then server responds', async () => {
+    let httpCalls = 0;
+    const server = await startServer((req, res) => {
+      httpCalls++;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ state: 'PENDING' }));
+    });
+    t.after(() => new Promise((r) => server.close(r)));
+    const port = server.address().port;
+    // Use a bad URL on first call by pointing at a closed port, then good URL.
+    // Simpler: monkey-patch global fetch to throw once.
+    const realFetch = global.fetch;
+    let thrown = 0;
+    global.fetch = async (...args) => {
+      if (thrown < 2) {
+        thrown++;
+        const err = new TypeError('fetch failed');
+        err.cause = Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+        throw err;
+      }
+      return realFetch(...args);
+    };
+    t.after(() => { global.fetch = realFetch; });
+    const status = await fetchDeploymentStatus(
+      `http://127.0.0.1:${port}`, TOKEN, DEPLOYMENT_ID_A,
+      { fetchOptions: { attempts: 5, baseDelayMs: 1, log: () => {} } },
+    );
+    assert.equal(status.state, 'PENDING');
+    assert.equal(thrown, 2, 'fetch should have thrown twice before succeeding');
+    assert.equal(httpCalls, 1, 'server should have been hit once after retries');
   });
 });
 
