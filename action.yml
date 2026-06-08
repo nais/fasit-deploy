@@ -1,5 +1,5 @@
 name: "Fasit deploy"
-description: "Deploy a feature to Fasit"
+description: "Deploy a feature assignment to Fasit"
 inputs:
   endpoint:
     description: "Fasit endpoint to deploy to"
