@@ -220,7 +220,7 @@ async function postAssignment(endpoint, token, payload, { fetchOptions } = {}) {
 	const response = await fetchWithRetry(
 		'assignment request',
 		() =>
-			fetch(`${endpoint}/github/assignment`, {
+			fetch(`${endpoint}/github/deployment`, {
 				method: 'POST',
 				headers: {
 					Authorization: `Bearer ${token}`,
@@ -257,7 +257,7 @@ async function fetchAssignmentStatus(
 	const response = await fetchWithRetry(
 		`Status request for ${id}`,
 		() =>
-			fetch(`${endpoint}/github/assignment/${encodeURIComponent(id)}`, {
+			fetch(`${endpoint}/github/deployment/${encodeURIComponent(id)}`, {
 				headers: { Authorization: `Bearer ${token}` },
 			}),
 		fetchOptions,

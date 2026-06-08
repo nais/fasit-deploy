@@ -440,7 +440,7 @@ test('fetchAssignmentStatus', async (t) => {
 			ASSIGNMENT_ID_A,
 		);
 		assert.equal(status.state, 'PENDING');
-		assert.equal(capturedPath, `/github/assignment/${ASSIGNMENT_ID_A}`);
+		assert.equal(capturedPath, `/github/deployment/${deployment_ID_A}`);
 	});
 
 	await t.test('throws on 404', async () => {
