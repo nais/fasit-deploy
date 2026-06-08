@@ -3,6 +3,9 @@
   "version": "4.0.0",
   "private": true,
   "description": "Deploy a feature to Fasit",
+  "devDependencies": {
+    "prettier": "^3.5.3"
+  },
   "scripts": {
     "test": "node --test test/*.test.js"
   }

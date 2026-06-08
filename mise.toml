@@ -1,0 +1,14 @@
+[tools]
+node = "24"
+
+[tasks.fmt]
+run = "npx prettier --write src/ test/"
+description = "Format source files"
+
+[tasks."fmt:check"]
+run = "npx prettier --check src/ test/"
+description = "Check formatting (CI)"
+
+[tasks.test]
+run = "node --test test/*.test.js"
+description = "Run tests"
